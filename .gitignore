@@ -1,1 +1,16 @@
-origins
+# DS_Store
+.DS_Store
+
+# Essay
+essay/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Env
+.env
+
+# Sessions
+agent/sessions/
