@@ -43,6 +43,18 @@ class OutboundSession:
         )
         return self._run_turn(opening_prompt)
 
+    def record_user(self, user_text: str) -> None:
+        """记录用户最后一句话（用于用户主动挂断的场景），不触发 Agent 响应。"""
+        self._transcript.append(
+            TranscriptEntry(
+                speaker="user",
+                text=user_text,
+                timestamp=_now_iso(),
+            )
+        )
+        self._history.append(_user_message(user_text))
+        self._is_closed = True
+
     def reply(self, user_text: str) -> TurnResult:
         if self._is_closed:
             raise RuntimeError("当前订单会话已结束，不再接受新的用户输入")
