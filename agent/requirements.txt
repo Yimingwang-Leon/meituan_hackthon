@@ -1,3 +1,4 @@
 openai-agents
 pydantic
 python-dotenv
+streamlit

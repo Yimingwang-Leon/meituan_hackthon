@@ -54,20 +54,26 @@ class AgentTurnOutput(BaseModel):
     )
 
 
-outbound_agent = Agent(
-    name="Meituan Outbound Agent",
-    instructions=(
-        OUTBOUND_INSTRUCTIONS
-        + "\n\n输出要求：\n"
-        + "1. 必须返回结构化结果。\n"
-        + "2. reply_text 只能是一句给用户听的自然中文口语。\n"
-        + "3. 当任务完成、用户明确拒绝、或无法继续推进时，should_end 必须为 true。\n"
-        + "4. 当 should_end 为 true 时，reply_text 必须是结束当前会话的收尾话术，不要再提新的问题。\n"
-        + "5. 当会话仍需继续时，should_end 为 false。"
-    ),
-    model="gpt-5.4-nano",
-    output_type=AgentTurnOutput,
+_OUTPUT_REQUIREMENTS = (
+    "\n\n输出要求：\n"
+    "1. 必须返回结构化结果。\n"
+    "2. reply_text 只能是一句给用户听的自然中文口语。\n"
+    "3. 当任务完成、用户明确拒绝、或无法继续推进时，should_end 必须为 true。\n"
+    "4. 当 should_end 为 true 时，reply_text 必须是结束当前会话的收尾话术，不要再提新的问题。\n"
+    "5. 当会话仍需继续时，should_end 为 false。"
 )
+
+
+def make_outbound_agent(instructions: str) -> Agent:
+    return Agent(
+        name="Meituan Outbound Agent",
+        instructions=instructions + _OUTPUT_REQUIREMENTS,
+        model="gpt-5.4-nano",
+        output_type=AgentTurnOutput,
+    )
+
+
+outbound_agent = make_outbound_agent(OUTBOUND_INSTRUCTIONS)
 
 
 def build_order_context(order: OrderRecord) -> str:

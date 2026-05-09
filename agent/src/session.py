@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from agents import Runner, trace
 
+from agents import Agent
+
 from .agent import AgentTurnOutput, build_order_context, outbound_agent
 from .types import LoadedOrder, SessionArchive, TranscriptEntry, TurnResult
 
@@ -20,8 +22,9 @@ def _user_message(text: str) -> dict[str, str]:
 
 
 class OutboundSession:
-    def __init__(self, loaded_order: LoadedOrder) -> None:
+    def __init__(self, loaded_order: LoadedOrder, agent: Agent | None = None) -> None:
         self._loaded_order = loaded_order
+        self._agent = agent or outbound_agent
         self._started_at = _now_iso()
         self._transcript: list[TranscriptEntry] = []
         self._history: list[Any] = [_user_message(build_order_context(loaded_order.order))]
@@ -68,8 +71,23 @@ class OutboundSession:
         )
         return self._run_turn(user_text)
 
+    def get_archive(self, persona_type: str | None = None) -> SessionArchive:
+        return SessionArchive(
+            order_id=self._loaded_order.order.order_id,
+            user_name=self._loaded_order.order.user_name,
+            source_file=self._loaded_order.file_name,
+            started_at=self._started_at,
+            ended_at=_now_iso(),
+            ended_by="agent_end",
+            transcript=self._transcript,
+            persona_type=persona_type,
+        )
+
     def save_archive(
-        self, output_dir: str | Path, ended_by: Literal["next", "quit", "agent_end"]
+        self,
+        output_dir: str | Path,
+        ended_by: Literal["next", "quit", "agent_end"],
+        persona_type: str | None = None,
     ) -> str:
         archive = SessionArchive(
             order_id=self._loaded_order.order.order_id,
@@ -79,6 +97,7 @@ class OutboundSession:
             ended_at=_now_iso(),
             ended_by=ended_by,
             transcript=self._transcript,
+            persona_type=persona_type,
         )
 
         output_path = Path(output_dir)
@@ -97,7 +116,7 @@ class OutboundSession:
             group_id=self._loaded_order.order.order_id,
         ):
             result = Runner.run_sync(
-                outbound_agent,
+                self._agent,
                 self._history + [_user_message(user_text)],
             )
 

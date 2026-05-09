@@ -12,5 +12,6 @@ __pycache__/
 # Env
 .env
 
-# Sessions
+# Sessions & Reports
 agent/sessions/
+agent/reports/

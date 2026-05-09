@@ -25,7 +25,7 @@ def run_session(loaded_order: LoadedOrder, persona: UserPersona, sessions_dir: P
 
     for _ in range(MAX_TURNS):
         if agent_turn.should_end:
-            outbound.save_archive(sessions_dir, "agent_end")
+            outbound.save_archive(sessions_dir, "agent_end", persona_type=persona.persona_type)
             return
 
         user_turn = simulator.reply(agent_turn.reply_text)
@@ -33,13 +33,13 @@ def run_session(loaded_order: LoadedOrder, persona: UserPersona, sessions_dir: P
 
         if user_turn.should_end:
             outbound.record_user(user_turn.reply_text)
-            outbound.save_archive(sessions_dir, "agent_end")
+            outbound.save_archive(sessions_dir, "agent_end", persona_type=persona.persona_type)
             return
 
         agent_turn = outbound.reply(user_turn.reply_text)
         print(f"  数字人: {agent_turn.reply_text}")
 
-    outbound.save_archive(sessions_dir, "agent_end")
+    outbound.save_archive(sessions_dir, "agent_end", persona_type=persona.persona_type)
     print(f"  [警告] 达到最大轮次 {MAX_TURNS}，强制结束")
 
 
