@@ -6,7 +6,7 @@ from typing import Literal
 from agents import Agent, Runner
 from pydantic import BaseModel, Field
 
-from .rules import Rule, RULES
+from .rules import Rule, RULES, SEVERITY_WEIGHTS
 from .types import SessionArchive
 
 
@@ -15,6 +15,7 @@ class RuleResult:
     rule_id: str
     rule_type: str
     description: str
+    severity: str
     result: Literal["pass", "fail", "not_applicable"]
     evidence: str
 
@@ -33,7 +34,7 @@ class EvaluationReport:
         ]
         for r in self.rule_results:
             icon = {"pass": "✓", "fail": "✗", "not_applicable": "-"}[r.result]
-            lines.append(f"  {icon} [{r.rule_id}] {r.description}")
+            lines.append(f"  {icon} [{r.rule_id}][{r.severity}] {r.description}")
             if r.result != "not_applicable":
                 lines.append(f"      → {r.evidence}")
         return "\n".join(lines)
@@ -86,22 +87,33 @@ def _evaluate_rule(rule: Rule, transcript_text: str) -> RuleResult:
         rule_id=rule.rule_id,
         rule_type=rule.rule_type,
         description=rule.description,
+        severity=rule.severity,
         result=output.result,
         evidence=output.evidence,
     )
 
 
-def evaluate_session(archive: SessionArchive, persona_type: str) -> EvaluationReport:
+def evaluate_session(
+    archive: SessionArchive,
+    persona_type: str,
+    rules: list[Rule] | None = None,
+) -> EvaluationReport:
     transcript_text = _format_transcript(archive)
+    active_rules = rules if rules is not None else RULES
     rule_results: list[RuleResult] = []
 
-    for rule in RULES:
+    for rule in active_rules:
         rule_result = _evaluate_rule(rule, transcript_text)
         rule_results.append(rule_result)
 
     scored = [r for r in rule_results if r.result != "not_applicable"]
-    passed = sum(1 for r in scored if r.result == "pass")
-    score = passed / len(scored) if scored else 0.0
+    total_weight = sum(SEVERITY_WEIGHTS.get(r.severity, 2) for r in scored)
+    passed_weight = sum(
+        SEVERITY_WEIGHTS.get(r.severity, 2)
+        for r in scored
+        if r.result == "pass"
+    )
+    score = passed_weight / total_weight if total_weight > 0 else 0.0
 
     return EvaluationReport(
         order_id=archive.order_id,

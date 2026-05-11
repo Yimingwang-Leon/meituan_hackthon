@@ -19,12 +19,20 @@ def _parse_order_record(raw_value: object) -> OrderRecord:
     if not isinstance(raw_value, dict):
         raise ValueError("订单内容必须是 JSON 对象")
 
+    def _optional_str(key: str) -> str | None:
+        v = raw_value.get(key)
+        return v.strip() if isinstance(v, str) and v.strip() else None
+
     return OrderRecord(
         user_name=_require_non_empty_string(raw_value.get("userName"), "userName"),
         order_id=_require_non_empty_string(raw_value.get("orderId"), "orderId"),
         eta=_require_non_empty_string(raw_value.get("eta"), "eta"),
         address=_require_non_empty_string(raw_value.get("address"), "address"),
-        notes=raw_value.get("notes").strip() if isinstance(raw_value.get("notes"), str) and raw_value.get("notes").strip() else None,
+        store_name=_optional_str("storeName"),
+        recorded_address=_optional_str("recordedAddress"),
+        delivery_note=_optional_str("deliveryNote"),
+        task_context=_optional_str("taskContext"),
+        scenario=_optional_str("scenario"),
     )
 
 

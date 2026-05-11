@@ -1,0 +1,9 @@
+{
+  "userName": "陈女士",
+  "orderId": "delay_001",
+  "eta": "2026-05-11 19:00",
+  "address": "上海市长宁区某小区 3 号楼",
+  "scenario": "delay",
+  "taskContext": "原计划 18:30 送达，因骑手运力紧张延迟至 19:00，需通知用户",
+  "storeName": "外婆家（长宁店）"
+}

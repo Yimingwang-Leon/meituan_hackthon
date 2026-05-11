@@ -10,7 +10,11 @@ class OrderRecord:
     order_id: str
     eta: str
     address: str
-    notes: str | None = None
+    store_name: str | None = None
+    recorded_address: str | None = None
+    delivery_note: str | None = None
+    task_context: str | None = None
+    scenario: str | None = None
 
 
 @dataclass(frozen=True)

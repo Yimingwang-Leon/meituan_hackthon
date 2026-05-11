@@ -1,0 +1,9 @@
+{
+  "userName": "赵女士",
+  "orderId": "cancel_001",
+  "eta": "2026-05-11 21:00",
+  "address": "上海市普陀区某小区",
+  "scenario": "cancel",
+  "taskContext": "用户已在 App 申请取消订单，需外呼确认取消原因并完成业务闭环",
+  "storeName": "肯德基（普陀店）"
+}

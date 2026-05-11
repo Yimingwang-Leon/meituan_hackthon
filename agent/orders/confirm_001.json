@@ -1,0 +1,9 @@
+{
+  "userName": "王先生",
+  "orderId": "confirm_001",
+  "eta": "2026-05-11 19:30",
+  "address": "上海市杨浦区某小区",
+  "scenario": "confirm",
+  "deliveryNote": "无门铃，请电话联系",
+  "storeName": "老上海本帮菜"
+}

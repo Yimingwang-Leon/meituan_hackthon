@@ -14,6 +14,7 @@ from src.agent import OUTBOUND_INSTRUCTIONS, make_outbound_agent
 from src.evaluator import EvaluationReport, evaluate_session
 from src.orders import load_pending_orders
 from src.persona import ALL_PERSONAS
+from src.rule_parser import parse_rules
 from src.session import OutboundSession
 from src.simulator import UserSimulator
 
@@ -36,6 +37,10 @@ tab_input, tab_conv, tab_report = st.tabs(["输入", "对话记录", "评测报�
 with tab_input:
     instructions = st.text_area("任务指令", value=OUTBOUND_INSTRUCTIONS, height=380)
 
+    all_orders = load_pending_orders(ORDERS_DIR)
+    order_options = [o.order.order_id for o in all_orders]
+    selected_order_ids = st.multiselect("选择订单", order_options, default=order_options)
+
     st.subheader("选择 Persona")
     cols = st.columns(3)
     selected_personas = []
@@ -45,15 +50,16 @@ with tab_input:
             if checked:
                 selected_personas.append(persona)
 
-    if st.button("开始评测", type="primary", disabled=not selected_personas):
+    if st.button("开始评测", type="primary", disabled=not selected_personas or not selected_order_ids):
         if not os.getenv("OPENAI_API_KEY"):
             st.error("缺少 OPENAI_API_KEY，请在 agent/.env 中填写")
             st.stop()
 
-        orders = load_pending_orders(ORDERS_DIR)
-        if not orders:
-            st.error(f"未在 {ORDERS_DIR} 中找到订单文件")
-            st.stop()
+        orders = [o for o in all_orders if o.order.order_id in selected_order_ids]
+
+        with st.spinner("解析规则中..."):
+            parsed_rules = parse_rules(instructions)
+        st.info(f"已解析 {len(parsed_rules)} 条规则")
 
         agent = make_outbound_agent(instructions)
         st.session_state.reports = []
@@ -62,6 +68,7 @@ with tab_input:
         total = len(orders) * len(selected_personas)
         progress = st.progress(0, text="准备中...")
         done = 0
+        results_container = st.container()
 
         for order in orders:
             for persona in selected_personas:
@@ -83,7 +90,7 @@ with tab_input:
 
                 outbound.save_archive(SESSIONS_DIR, "agent_end", persona_type=persona.persona_type)
                 archive = outbound.get_archive(persona_type=persona.persona_type)
-                report = evaluate_session(archive, persona.persona_type)
+                report = evaluate_session(archive, persona.persona_type, rules=parsed_rules)
 
                 st.session_state.reports.append(report)
                 st.session_state.transcripts.append({
@@ -92,10 +99,31 @@ with tab_input:
                     "transcript": archive.transcript,
                 })
 
+                with results_container:
+                    icon = "✅" if report.score >= 0.8 else "⚠️" if report.score >= 0.5 else "❌"
+                    with st.expander(f"{icon} {label}  {report.score:.0%}", expanded=False):
+                        col_left, col_right = st.columns(2)
+                        with col_left:
+                            st.caption("对话记录")
+                            for entry in archive.transcript:
+                                if entry.speaker == "agent":
+                                    with st.chat_message("assistant"):
+                                        st.write(entry.text)
+                                else:
+                                    with st.chat_message("user"):
+                                        st.write(entry.text)
+                        with col_right:
+                            st.caption("规则评测")
+                            for rr in report.rule_results:
+                                rule_icon = {"pass": "✅", "fail": "❌", "not_applicable": "➖"}[rr.result]
+                                st.markdown(f"{rule_icon} **[{rr.rule_id}/{rr.severity}]** {rr.description}")
+                                if rr.result != "not_applicable":
+                                    st.caption(rr.evidence)
+
                 done += 1
 
         progress.progress(1.0, text="评测完成")
-        st.success("完成！请查看「对话记录」和「评测报告」标签页。")
+        st.success(f"完成！共跑 {total} 个 session。")
 
 
 # ── 对话记录页 ───────────────────────────────────────────────────────────────

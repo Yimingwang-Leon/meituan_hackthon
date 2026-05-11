@@ -77,14 +77,19 @@ outbound_agent = make_outbound_agent(OUTBOUND_INSTRUCTIONS)
 
 
 def build_order_context(order: OrderRecord) -> str:
-    notes = order.notes or "无"
-    return "\n".join(
-        [
-            "【当前外呼订单】",
-            f"用户称呼：{order.user_name}",
-            f"订单编号：{order.order_id}",
-            f"预计送达时间：{order.eta}",
-            f"配送地址：{order.address}",
-            f"备注：{notes}",
-        ]
-    )
+    lines = [
+        "【当前外呼订单】",
+        f"用户称呼：{order.user_name}",
+        f"订单编号：{order.order_id}",
+    ]
+    if order.store_name:
+        lines.append(f"商家名称：{order.store_name}")
+    lines.append(f"预计送达时间：{order.eta}")
+    lines.append(f"配送地址：{order.address}")
+    if order.recorded_address:
+        lines.append(f"系统记录地址（需核实）：{order.recorded_address}")
+    if order.delivery_note:
+        lines.append(f"配送备注：{order.delivery_note}")
+    if order.task_context:
+        lines.append(f"外呼背景：{order.task_context}")
+    return "\n".join(lines)

@@ -4,6 +4,13 @@ from dataclasses import dataclass
 from typing import Literal
 
 RuleType = Literal["required", "conditional", "forbidden"]
+Severity = Literal["critical", "major", "minor"]
+
+SEVERITY_WEIGHTS: dict[str, int] = {
+    "critical": 3,
+    "major": 2,
+    "minor": 1,
+}
 
 
 @dataclass(frozen=True)
@@ -12,6 +19,7 @@ class Rule:
     description: str
     rule_type: RuleType
     evaluation_hint: str
+    severity: Severity = "major"
 
 
 RULES: list[Rule] = [
