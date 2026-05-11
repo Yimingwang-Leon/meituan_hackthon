@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from typing import Literal
 
 from agents import Agent, Runner
@@ -8,6 +10,8 @@ from pydantic import BaseModel, Field
 
 from .rules import Rule, RULES, SEVERITY_WEIGHTS
 from .types import SessionArchive
+
+JUDGE_SAMPLES = 3
 
 
 @dataclass
@@ -18,6 +22,8 @@ class RuleResult:
     severity: str
     result: Literal["pass", "fail", "not_applicable"]
     evidence: str
+    confidence: float = 1.0
+    votes: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -27,14 +33,62 @@ class EvaluationReport:
     rule_results: list[RuleResult]
     score: float
 
+    @property
+    def mean_confidence(self) -> float:
+        if not self.rule_results:
+            return 0.0
+        return sum(r.confidence for r in self.rule_results) / len(self.rule_results)
+
+
+@dataclass
+class CoverageReport:
+    total_conditional: int
+    triggered_conditional: int
+    untriggered_rules: list[Rule]
+    triggered_by_persona: dict[str, set[str]]
+
+    @property
+    def coverage_rate(self) -> float:
+        if self.total_conditional == 0:
+            return 1.0
+        return self.triggered_conditional / self.total_conditional
+
+
+def compute_coverage(
+    reports: list[EvaluationReport],
+    rules: list[Rule],
+) -> CoverageReport:
+    conditional_rules = [r for r in rules if r.rule_type == "conditional"]
+    triggered_ids: set[str] = set()
+    triggered_by_persona: dict[str, set[str]] = {}
+
+    for report in reports:
+        for rr in report.rule_results:
+            if rr.rule_type == "conditional" and rr.result != "not_applicable":
+                triggered_ids.add(rr.rule_id)
+                triggered_by_persona.setdefault(report.persona_type, set()).add(rr.rule_id)
+
+    untriggered = [r for r in conditional_rules if r.rule_id not in triggered_ids]
+
+    return CoverageReport(
+        total_conditional=len(conditional_rules),
+        triggered_conditional=len(triggered_ids),
+        untriggered_rules=untriggered,
+        triggered_by_persona=triggered_by_persona,
+    )
+
     def summary(self) -> str:
         lines = [
-            f"订单：{self.order_id}  Persona：{self.persona_type}  得分：{self.score:.0%}",
+            f"订单：{self.order_id}  Persona：{self.persona_type}  "
+            f"得分：{self.score:.0%}  平均置信度：{self.mean_confidence:.0%}",
             "",
         ]
         for r in self.rule_results:
             icon = {"pass": "✓", "fail": "✗", "not_applicable": "-"}[r.result]
-            lines.append(f"  {icon} [{r.rule_id}][{r.severity}] {r.description}")
+            lines.append(
+                f"  {icon} [{r.rule_id}][{r.severity}] {r.description}  "
+                f"(置信度 {r.confidence:.0%})"
+            )
             if r.result != "not_applicable":
                 lines.append(f"      → {r.evidence}")
         return "\n".join(lines)
@@ -67,8 +121,16 @@ def _format_transcript(archive: SessionArchive) -> str:
     return "\n".join(lines)
 
 
-def _evaluate_rule(rule: Rule, transcript_text: str) -> RuleResult:
-    prompt = (
+def _run_judge_once(prompt: str, rule_id: str) -> JudgeOutput:
+    result = Runner.run_sync(_judge_agent, prompt)
+    output = result.final_output
+    if not isinstance(output, JudgeOutput):
+        raise RuntimeError(f"规则 {rule_id} 评估返回了意外结果类型")
+    return output
+
+
+def _build_rule_prompt(rule: Rule, transcript_text: str) -> str:
+    return (
         f"【对话记录】\n{transcript_text}\n\n"
         f"【评估规则】\n"
         f"规则ID：{rule.rule_id}\n"
@@ -77,19 +139,21 @@ def _evaluate_rule(rule: Rule, transcript_text: str) -> RuleResult:
         f"评估提示：{rule.evaluation_hint}"
     )
 
-    result = Runner.run_sync(_judge_agent, prompt)
-    output = result.final_output
 
-    if not isinstance(output, JudgeOutput):
-        raise RuntimeError(f"规则 {rule.rule_id} 评估返回了意外结果类型")
-
+def _aggregate_votes(rule: Rule, outputs: list[JudgeOutput]) -> RuleResult:
+    vote_counter: Counter[str] = Counter(o.result for o in outputs)
+    winner, top_votes = vote_counter.most_common(1)[0]
+    confidence = top_votes / len(outputs)
+    winner_outputs = [o for o in outputs if o.result == winner]
     return RuleResult(
         rule_id=rule.rule_id,
         rule_type=rule.rule_type,
         description=rule.description,
         severity=rule.severity,
-        result=output.result,
-        evidence=output.evidence,
+        result=winner,
+        evidence=winner_outputs[0].evidence,
+        confidence=confidence,
+        votes=dict(vote_counter),
     )
 
 
@@ -97,14 +161,25 @@ def evaluate_session(
     archive: SessionArchive,
     persona_type: str,
     rules: list[Rule] | None = None,
+    n_samples: int = JUDGE_SAMPLES,
+    max_workers: int = 16,  # 保留参数兼容，但已不使用
 ) -> EvaluationReport:
     transcript_text = _format_transcript(archive)
     active_rules = rules if rules is not None else RULES
-    rule_results: list[RuleResult] = []
 
-    for rule in active_rules:
-        rule_result = _evaluate_rule(rule, transcript_text)
-        rule_results.append(rule_result)
+    prompts = {rule.rule_id: _build_rule_prompt(rule, transcript_text) for rule in active_rules}
+
+    total_calls = len(active_rules) * n_samples
+    print(f"    顺序评测 {total_calls} 个 judge 任务", flush=True)
+
+    rule_results: list[RuleResult] = []
+    for rule_idx, rule in enumerate(active_rules):
+        outputs = [
+            _run_judge_once(prompts[rule.rule_id], rule.rule_id)
+            for _ in range(n_samples)
+        ]
+        rule_results.append(_aggregate_votes(rule, outputs))
+        print(f"    judge 进度 {(rule_idx + 1) * n_samples}/{total_calls}", flush=True)
 
     scored = [r for r in rule_results if r.result != "not_applicable"]
     total_weight = sum(SEVERITY_WEIGHTS.get(r.severity, 2) for r in scored)
