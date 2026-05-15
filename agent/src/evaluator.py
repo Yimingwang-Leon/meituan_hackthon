@@ -39,6 +39,22 @@ class EvaluationReport:
             return 0.0
         return sum(r.confidence for r in self.rule_results) / len(self.rule_results)
 
+    def summary(self) -> str:
+        lines = [
+            f"订单：{self.order_id}  Persona：{self.persona_type}  "
+            f"得分：{self.score:.0%}  平均置信度：{self.mean_confidence:.0%}",
+            "",
+        ]
+        for r in self.rule_results:
+            icon = {"pass": "✓", "fail": "✗", "not_applicable": "-"}[r.result]
+            lines.append(
+                f"  {icon} [{r.rule_id}][{r.severity}] {r.description}  "
+                f"(置信度 {r.confidence:.0%})"
+            )
+            if r.result != "not_applicable":
+                lines.append(f"      → {r.evidence}")
+        return "\n".join(lines)
+
 
 @dataclass
 class CoverageReport:
@@ -76,22 +92,6 @@ def compute_coverage(
         untriggered_rules=untriggered,
         triggered_by_persona=triggered_by_persona,
     )
-
-    def summary(self) -> str:
-        lines = [
-            f"订单：{self.order_id}  Persona：{self.persona_type}  "
-            f"得分：{self.score:.0%}  平均置信度：{self.mean_confidence:.0%}",
-            "",
-        ]
-        for r in self.rule_results:
-            icon = {"pass": "✓", "fail": "✗", "not_applicable": "-"}[r.result]
-            lines.append(
-                f"  {icon} [{r.rule_id}][{r.severity}] {r.description}  "
-                f"(置信度 {r.confidence:.0%})"
-            )
-            if r.result != "not_applicable":
-                lines.append(f"      → {r.evidence}")
-        return "\n".join(lines)
 
 
 class JudgeOutput(BaseModel):

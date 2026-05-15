@@ -7,6 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from src.evaluator import EvaluationReport, evaluate_session
+from src.memory import append_evaluation_memory
 from src.types import SessionArchive, TranscriptEntry
 
 
@@ -136,6 +137,7 @@ def main() -> None:
         raise RuntimeError("缺少 OPENAI_API_KEY，请在 agent/.env 中填写")
 
     sessions_dir = project_root / "sessions"
+    memory_dir = project_root / "memory"
     session_files = sorted(sessions_dir.glob("*.json"))
 
     if not session_files:
@@ -149,6 +151,7 @@ def main() -> None:
         archive = _load_archive(path)
         persona_type = archive.persona_type or "unknown"
         report = evaluate_session(archive, persona_type)
+        append_evaluation_memory(archive, report, memory_dir)
         print(report.summary())
         reports.append(report)
 

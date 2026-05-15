@@ -33,6 +33,7 @@
 agent/
 ├── orders/          # 待测订单 JSON（8 条，覆盖 5 种场景）
 ├── instructions/    # 各场景的任务指令 + 人工验证用 criteria
+├── memory/          # 逐次评测记忆（transcript + judger 判断）
 ├── sessions/        # 自动生成的对话归档
 ├── src/
 │   ├── rule_parser.py   # 指令 → 原子规则（LLM 拆解）
@@ -40,6 +41,7 @@ agent/
 │   ├── simulator.py     # 用户模拟器
 │   ├── persona.py       # 6 种 Persona 定义
 │   ├── evaluator.py     # 多采样 LLM Judge，按 severity 加权 + 触发覆盖率
+│   ├── memory.py        # 评测记忆落盘（JSONL）
 │   ├── session.py       # 单次对话会话管理
 │   ├── orders.py        # 订单加载
 │   ├── rules.py         # Rule 数据类 + severity 权重

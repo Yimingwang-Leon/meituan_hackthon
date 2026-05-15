@@ -18,6 +18,7 @@ from src.evaluator import (
     compute_coverage,
     evaluate_session,
 )
+from src.memory import append_evaluation_memory
 from src.orders import load_pending_orders
 from src.persona import ALL_PERSONAS
 from src.rule_parser import parse_rules
@@ -27,6 +28,7 @@ from src.simulator import UserSimulator
 MAX_TURNS = 15
 SESSIONS_DIR = Path(__file__).parent / "sessions"
 ORDERS_DIR = Path(__file__).parent / "orders"
+MEMORY_DIR = Path(__file__).parent / "memory"
 
 PERSONA_LABELS = {
     "cooperative": "配合型",
@@ -1070,6 +1072,7 @@ if run_clicked:
             n_samples=judge_samples,
             max_workers=8,
         )
+        append_evaluation_memory(archive, report, MEMORY_DIR)
         print(f"  评测完成，得分 {report.score:.0%}", flush=True)
         item = {
             "order_id": order.order.order_id,
