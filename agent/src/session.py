@@ -71,7 +71,13 @@ class OutboundSession:
         )
         return self._run_turn(user_text)
 
-    def get_archive(self, persona_type: str | None = None) -> SessionArchive:
+    def get_archive(
+        self,
+        persona_type: str | None = None,
+        simulator_label: str | None = None,
+        test_case_id: str | None = None,
+        target_rule_id: str | None = None,
+    ) -> SessionArchive:
         return SessionArchive(
             order_id=self._loaded_order.order.order_id,
             user_name=self._loaded_order.order.user_name,
@@ -81,6 +87,9 @@ class OutboundSession:
             ended_by="agent_end",
             transcript=self._transcript,
             persona_type=persona_type,
+            simulator_label=simulator_label,
+            test_case_id=test_case_id,
+            target_rule_id=target_rule_id,
         )
 
     def save_archive(
@@ -88,6 +97,9 @@ class OutboundSession:
         output_dir: str | Path,
         ended_by: Literal["next", "quit", "agent_end"],
         persona_type: str | None = None,
+        simulator_label: str | None = None,
+        test_case_id: str | None = None,
+        target_rule_id: str | None = None,
     ) -> str:
         archive = SessionArchive(
             order_id=self._loaded_order.order.order_id,
@@ -98,6 +110,9 @@ class OutboundSession:
             ended_by=ended_by,
             transcript=self._transcript,
             persona_type=persona_type,
+            simulator_label=simulator_label,
+            test_case_id=test_case_id,
+            target_rule_id=target_rule_id,
         )
 
         output_path = Path(output_dir)

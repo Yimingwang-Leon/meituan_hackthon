@@ -188,13 +188,14 @@ agent/
 
 ### `src/persona.py`
 
-- 预置 6 种 Persona：
+- 预置 7 种 Persona：
   - `cooperative`
   - `suspicious`
   - `impatient`
   - `ambiguous`
   - `info_missing`
   - `rejector`
+  - `hostile`
 
 Persona 的核心控制参数是：
 

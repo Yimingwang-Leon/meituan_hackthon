@@ -41,6 +41,9 @@ class SessionArchive:
     ended_by: Literal["next", "quit", "agent_end"]
     transcript: list[TranscriptEntry]
     persona_type: str | None = None
+    simulator_label: str | None = None
+    test_case_id: str | None = None
+    target_rule_id: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

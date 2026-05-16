@@ -21,8 +21,8 @@ from src.evaluator import (
 from src.memory import append_evaluation_memory
 from src.orders import load_pending_orders
 from src.persona import ALL_PERSONAS
-from src.rule_parser import parse_rules
 from src.session import OutboundSession
+from src.simulation_plan import build_simulation_plan
 from src.simulator import UserSimulator
 
 MAX_TURNS = 15
@@ -37,6 +37,7 @@ PERSONA_LABELS = {
     "ambiguous": "模糊型",
     "info_missing": "缺信息型",
     "rejector": "拒收型",
+    "hostile": "对抗型",
 }
 
 st.set_page_config(
@@ -743,7 +744,7 @@ def _build_heatmap_df(reports: list[EvaluationReport]) -> pd.DataFrame:
                 "规则": f"{rr.rule_id}  {rr.description[:26]}",
                 "rule_id": rr.rule_id,
                 "severity": rr.severity,
-                "角色": _persona_label(report.persona_type),
+                "画像": _persona_label(report.persona_type),
                 "score": score,
             })
     df = pd.DataFrame(rows)
@@ -751,7 +752,7 @@ def _build_heatmap_df(reports: list[EvaluationReport]) -> pd.DataFrame:
         return df
     return (
         df.dropna(subset=["score"])
-        .groupby(["规则", "rule_id", "severity", "角色"])
+        .groupby(["规则", "rule_id", "severity", "画像"])
         .agg(通过率=("score", "mean"), 样本数=("score", "count"))
         .reset_index()
     )
@@ -768,7 +769,7 @@ def _render_heatmap(reports: list[EvaluationReport]) -> None:
         alt.Chart(df)
         .mark_rect(stroke="#ffffff", strokeWidth=2, cornerRadius=4)
         .encode(
-            x=alt.X("角色:N", title=None, axis=alt.Axis(
+            x=alt.X("画像:N", title=None, axis=alt.Axis(
                 labelAngle=0, labelPadding=10, ticks=False, domain=False, orient="top",
             )),
             y=alt.Y("规则:N", title=None, sort=alt.SortField("rule_id"),
@@ -781,7 +782,7 @@ def _render_heatmap(reports: list[EvaluationReport]) -> None:
             ),
             tooltip=[
                 alt.Tooltip("规则:N"),
-                alt.Tooltip("角色:N"),
+                alt.Tooltip("画像:N"),
                 alt.Tooltip("severity:N", title="严重度"),
                 alt.Tooltip("通过率:Q", format=".0%"),
                 alt.Tooltip("样本数:Q"),
@@ -797,7 +798,7 @@ def _render_persona_bar(reports: list[EvaluationReport]) -> None:
     for r in reports:
         by_persona.setdefault(r.persona_type, []).append(r.score)
     df = pd.DataFrame([
-        {"角色": _persona_label(k), "得分": sum(v) / len(v)}
+        {"画像": _persona_label(k), "得分": sum(v) / len(v)}
         for k, v in by_persona.items()
     ])
 
@@ -805,7 +806,7 @@ def _render_persona_bar(reports: list[EvaluationReport]) -> None:
         alt.Chart(df)
         .mark_bar(cornerRadiusEnd=4, height=22)
         .encode(
-            y=alt.Y("角色:N", sort="-x", title=None,
+            y=alt.Y("画像:N", sort="-x", title=None,
                     axis=alt.Axis(labelPadding=10, ticks=False, domain=False)),
             x=alt.X("得分:Q", scale=alt.Scale(domain=[0, 1]),
                     axis=alt.Axis(format="%", title=None, grid=True)),
@@ -814,7 +815,7 @@ def _render_persona_bar(reports: list[EvaluationReport]) -> None:
                 scale=alt.Scale(range=["#dc2626", "#f59e0b", "#059669"], domain=[0, 0.5, 1]),
                 legend=None,
             ),
-            tooltip=[alt.Tooltip("角色:N"), alt.Tooltip("得分:Q", format=".0%")],
+            tooltip=[alt.Tooltip("画像:N"), alt.Tooltip("得分:Q", format=".0%")],
         )
         .properties(height=max(200, 42 * len(df)))
     )
@@ -828,8 +829,9 @@ def _render_session_card(item: dict, report: EvaluationReport) -> None:
         return "薄弱"
 
     persona_label = _persona_label(report.persona_type)
+    session_label = item.get("simulator_label") or persona_label
     head = (
-        f"{report.order_id} · {persona_label}"
+        f"{report.order_id} · {session_label}"
         f"   ·   {_badge(report.score)} {report.score:.0%}"
         f"   ·   置信度 {report.mean_confidence:.0%}"
     )
@@ -897,7 +899,7 @@ with st.sidebar:
         placeholder="请选择待评测订单...",
     )
 
-    st.markdown("### 用户角色")
+    st.markdown("### 测试画像")
     selected_personas = []
     for persona in ALL_PERSONAS:
         checked = st.checkbox(
@@ -918,12 +920,11 @@ with st.sidebar:
         help="每条规则的 LLM 评判次数。多采样可以输出置信度，但慢约 N 倍。",
     )
 
-    n_sessions = len(selected_order_ids) * len(selected_personas)
     st.markdown(
         f'<div class="side-stat">'
-        f'  <div class="label">即将运行</div>'
-        f'  <div class="value">{n_sessions} 个会话</div>'
-        f'  <div class="hint">{len(selected_order_ids)} 订单 × {len(selected_personas)} 角色</div>'
+        f'  <div class="label">运行范围</div>'
+        f'  <div class="value">{len(selected_order_ids)} 个订单</div>'
+        f'  <div class="hint">{len(selected_personas)} 个画像筛选，实际会话数按解析规则生成</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -945,7 +946,7 @@ st.markdown(
             <em>指令遵循能力</em>。
         </h1>
         <p class="hero-sub">
-            粘贴任意外呼任务指令，系统自动拆解为原子规则，调用多种用户角色模拟真实对话，
+            粘贴任意外呼任务指令，系统自动拆解为原子规则，并为每条规则生成目标驱动的用户测试用例，
             通过多采样 LLM 评判，输出可解释、可量化的评测报告。
         </p>
         <div class="hero-meta">
@@ -959,7 +960,7 @@ st.markdown(
             </div>
             <div class="hero-meta-item">
                 <div class="label">覆盖度</div>
-                <div class="value">6 种角色模拟</div>
+                <div class="value">目标驱动模拟</div>
             </div>
         </div>
     </div>
@@ -1000,18 +1001,30 @@ if run_clicked:
 
     orders = [o for o in all_orders if o.order.order_id in selected_order_ids]
 
-    with st.spinner("正在解析任务指令为原子规则..."):
-        parsed_rules = parse_rules(instructions)
+    with st.spinner("正在解析任务指令并生成测试用例..."):
+        simulation_plan = build_simulation_plan(instructions)
+    parsed_rules = simulation_plan.parsed_rules
+    agent_spec = simulation_plan.agent_spec
+    generated_cases = simulation_plan.test_cases
+    selected_profile_types = {persona.persona_type for persona in selected_personas}
+    active_cases = [
+        case for case in generated_cases
+        if case.profile_type in selected_profile_types
+    ]
+    if not active_cases:
+        st.warning("当前画像筛选没有命中任何自动生成的测试用例。")
+        st.stop()
     st.session_state.parsed_rules = parsed_rules
 
     n_required = sum(1 for r in parsed_rules if r.rule_type == "required")
     n_cond = sum(1 for r in parsed_rules if r.rule_type == "conditional")
     n_forbid = sum(1 for r in parsed_rules if r.rule_type == "forbidden")
 
-    _section_head("02", "解析<em>规则</em>", "rule_parser 输出")
+    _section_head("02", "解析<em>规则</em>", "rule_parser + test_case_generator 输出")
     st.markdown(
         f'<div class="bento">'
         f'{_bento_cell("规则总数", str(len(parsed_rules)), "原子可独立验证", feature=True)}'
+        f'{_bento_cell("测试用例", str(len(generated_cases)), "每条规则生成 1 条目标驱动用例")}'
         f'{_bento_cell("必做规则", str(n_required), "每次都要遵守")}'
         f'{_bento_cell("条件规则", str(n_cond), "特定场景触发")}'
         f'{_bento_cell("禁止规则", str(n_forbid), "任何时候禁止")}'
@@ -1024,7 +1037,7 @@ if run_clicked:
     st.session_state.transcripts = []
     st.session_state.run_complete = False
 
-    tasks = [(order, persona) for order in orders for persona in selected_personas]
+    tasks = [(order, case) for order in orders for case in active_cases]
     total = len(tasks)
 
     _section_head("03", "实时<em>执行</em>", f"{total} 个会话 · 顺序运行")
@@ -1032,9 +1045,10 @@ if run_clicked:
     progress = st.progress(0, text=f"准备运行 {total} 个会话...")
     live = st.container()
 
-    for done, (order, persona) in enumerate(tasks):
-        persona_label = _persona_label(persona.persona_type)
-        label = f"{order.order.order_id} × {persona_label}"
+    for done, (order, case) in enumerate(tasks):
+        persona_label = _persona_label(case.profile_type)
+        session_label = f"{case.target_rule_id} · {persona_label}"
+        label = f"{order.order.order_id} × {session_label}"
         print(f"\n[{done + 1}/{total}] 开始 {label}", flush=True)
         progress.progress(
             done / total,
@@ -1042,7 +1056,7 @@ if run_clicked:
         )
 
         outbound = OutboundSession(order, agent=agent)
-        simulator = UserSimulator(order, persona)
+        simulator = UserSimulator(order, case, agent_spec)
         print(f"  agent.start()", flush=True)
         agent_turn = outbound.start()
         for turn_idx in range(MAX_TURNS):
@@ -1063,11 +1077,23 @@ if run_clicked:
             done / total,
             text=f"规则评测中 · {label}  ({done + 1}/{total})",
         )
-        outbound.save_archive(SESSIONS_DIR, "agent_end", persona_type=persona.persona_type)
-        archive = outbound.get_archive(persona_type=persona.persona_type)
+        outbound.save_archive(
+            SESSIONS_DIR,
+            "agent_end",
+            persona_type=case.profile_type,
+            simulator_label=session_label,
+            test_case_id=case.test_id,
+            target_rule_id=case.target_rule_id,
+        )
+        archive = outbound.get_archive(
+            persona_type=case.profile_type,
+            simulator_label=session_label,
+            test_case_id=case.test_id,
+            target_rule_id=case.target_rule_id,
+        )
         report = evaluate_session(
             archive,
-            persona.persona_type,
+            case.profile_type,
             rules=parsed_rules,
             n_samples=judge_samples,
             max_workers=8,
@@ -1076,7 +1102,10 @@ if run_clicked:
         print(f"  评测完成，得分 {report.score:.0%}", flush=True)
         item = {
             "order_id": order.order.order_id,
-            "persona_type": persona.persona_type,
+            "persona_type": case.profile_type,
+            "simulator_label": session_label,
+            "test_case_id": case.test_id,
+            "target_rule_id": case.target_rule_id,
             "transcript": archive.transcript,
         }
 
@@ -1109,15 +1138,15 @@ if st.session_state.run_complete and st.session_state.reports:
         f'{_bento_cell("综合得分", f"{avg_score:.0%}", f"共 {total} 个会话平均", feature=True)}'
         f'{_bento_cell("条件覆盖率", f"{coverage.coverage_rate:.0%}", f"{coverage.triggered_conditional}/{coverage.total_conditional} 条规则被触发")}'
         f'{_bento_cell("评估置信度", f"{avg_conf:.0%}", "LLM 自一致率")}'
-        f'{_bento_cell("会话总数", f"{total}", "订单 × 角色")}'
+        f'{_bento_cell("会话总数", f"{total}", "订单 × 目标用例")}'
         f'</div>',
         unsafe_allow_html=True,
     )
 
-    _section_head("05", "规则 × <em>角色</em>热力图", "红=低通过率 / 绿=高通过率")
+    _section_head("05", "规则 × <em>测试画像</em>热力图", "红=低通过率 / 绿=高通过率")
     _render_heatmap(reports)
 
-    _section_head("06", "<em>角色</em>得分排名", "哪类用户最容易暴露问题")
+    _section_head("06", "<em>测试画像</em>得分排名", "哪类用户最容易暴露问题")
     _render_persona_bar(reports)
 
     _section_head("07", "模拟器<em>覆盖度</em>", "证明模拟器的充分性")
@@ -1145,7 +1174,7 @@ if st.session_state.run_complete and st.session_state.reports:
             st.markdown(f'<div class="rule-list">{"".join(rows)}</div>', unsafe_allow_html=True)
 
     if coverage.triggered_by_persona:
-        with st.expander("各角色触发的条件规则", expanded=False):
+        with st.expander("各测试画像触发的条件规则", expanded=False):
             for persona_type, rule_ids in sorted(coverage.triggered_by_persona.items()):
                 tags = " ".join(
                     f'<span class="pill pill-brand">{rid}</span>'

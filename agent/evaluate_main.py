@@ -30,6 +30,9 @@ def _load_archive(path: Path) -> SessionArchive:
         ended_by=raw["ended_by"],
         transcript=transcript,
         persona_type=raw.get("persona_type"),
+        simulator_label=raw.get("simulator_label"),
+        test_case_id=raw.get("test_case_id"),
+        target_rule_id=raw.get("target_rule_id"),
     )
 
 

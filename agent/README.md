@@ -13,7 +13,7 @@
                                                           ↑
   outbound agent（只看原始 instruction）→ 对话记录 ───────┘
       ↑
-  user simulator（6 种 Persona）
+  user simulator（7 种 Persona）
 ```
 
 **关键设计原则**：呼出 agent 只看原始 instruction，不接触评测规则，避免"对着答案答题"。
@@ -25,7 +25,7 @@
 | 可解释 | 每条规则独立判断，输出 pass / fail / not_applicable + 引用具体轮次的 evidence |
 | 可量化 | 按 severity（critical/major/minor）加权打分；触发条件未出现的规则不计入分母 |
 | 可靠性 | 每条规则多采样投票，输出**置信度**（多次 judge 一致率） |
-| 模拟器充分性 | 6 种 Persona 覆盖主要分支；输出**条件规则触发覆盖率**，量化哪些分支被实际测试到 |
+| 模拟器充分性 | 7 种 Persona 覆盖主要分支；输出**条件规则触发覆盖率**，量化哪些分支被实际测试到 |
 
 ## 目录结构
 
@@ -39,7 +39,7 @@ agent/
 │   ├── rule_parser.py   # 指令 → 原子规则（LLM 拆解）
 │   ├── agent.py         # 外呼数字人（被测对象）
 │   ├── simulator.py     # 用户模拟器
-│   ├── persona.py       # 6 种 Persona 定义
+│   ├── persona.py       # 7 种 Persona 定义
 │   ├── evaluator.py     # 多采样 LLM Judge，按 severity 加权 + 触发覆盖率
 │   ├── memory.py        # 评测记忆落盘（JSONL）
 │   ├── session.py       # 单次对话会话管理
@@ -93,7 +93,7 @@ cp agent/.env.example agent/.env
 cd agent
 
 # 跑对话（可指定单条订单）
-python auto_main.py                  # 全部订单 × 6 Persona
+python auto_main.py                  # 全部订单 × 7 Persona
 python auto_main.py confirm_001      # 仅指定订单
 
 # 评估所有已保存的对话
@@ -159,6 +159,7 @@ python test_parser.py
 | ambiguous | 模糊型 | 回答含糊，经常不确定 |
 | info_missing | 缺信息型 | 不在家，无法提供关键信息 |
 | rejector | 拒收型 | 明确拒收，测试拒收分支 |
+| hostile | 对抗型 | 试图套取内部信息或诱导数字人执行越权操作 |
 
 ## 已知限制
 
