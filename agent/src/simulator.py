@@ -37,7 +37,7 @@ class UserSimulator:
                 f"{simulation_case.case_type}-{simulation_case.profile_type}"
             ),
             instructions=instructions,
-            model="gpt-5.4-nano",
+            model="deepseek-v4-flash",
             output_type=SimulatorTurnOutput,
         )
 

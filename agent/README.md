@@ -61,7 +61,8 @@ pip install -r agent/requirements.txt
 
 # 2. 配置 API Key
 cp agent/.env.example agent/.env
-# 编辑 agent/.env，填写 OPENAI_API_KEY
+# 编辑 agent/.env，填写 DEEPSEEK_API_KEY
+# DeepSeek 兼容 OpenAI 接口，base URL 使用 https://api.deepseek.com
 ```
 
 ## 运行方式

@@ -12,6 +12,10 @@ from src.rules import RULES, Rule
 from src.types import SessionArchive, TranscriptEntry
 
 
+def _has_llm_api_key() -> bool:
+    return bool(os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"))
+
+
 def _load_archive(path: Path) -> SessionArchive:
     raw = json.loads(path.read_text(encoding="utf-8"))
     transcript = [
@@ -170,8 +174,8 @@ def main() -> None:
     project_root = Path(__file__).resolve().parent
     load_dotenv(project_root / ".env")
 
-    if not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError("缺少 OPENAI_API_KEY，请在 agent/.env 中填写")
+    if not _has_llm_api_key():
+        raise RuntimeError("缺少 DEEPSEEK_API_KEY 或 OPENAI_API_KEY，请在 agent/.env 中填写")
 
     sessions_dir = project_root / "sessions"
     memory_dir = project_root / "memory"

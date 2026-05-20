@@ -179,7 +179,7 @@ def _get_parser_agent():
         _parser_agent = Agent(
             name="RuleParser",
             instructions=_PARSER_INSTRUCTIONS,
-            model="gpt-5.4-nano",
+            model="deepseek-v4-flash",
             output_type=ParsedRuleList,
         )
 

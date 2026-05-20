@@ -51,7 +51,7 @@ def make_outbound_agent(instructions: str) -> Agent:
     return Agent(
         name="Evaluated Dialogue Agent",
         instructions=instructions + _OUTPUT_REQUIREMENTS,
-        model="gpt-5.4-nano",
+        model="deepseek-v4-flash",
         output_type=AgentTurnOutput,
     )
 

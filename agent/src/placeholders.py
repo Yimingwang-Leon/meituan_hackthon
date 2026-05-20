@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import re
 from enum import Enum
+from typing import TYPE_CHECKING
 
-from agents import Agent, Runner
 from pydantic import BaseModel, Field
 
-from .agent_spec import AgentSpec
+if TYPE_CHECKING:
+    from .agent_spec import AgentSpec
 
 
 class PlaceholderType(str, Enum):
@@ -110,12 +111,7 @@ _EXTRACTOR_INSTRUCTIONS = """\
 - sets: 一组 set_id="set_default"，values={}
 """
 
-_extractor_agent = Agent(
-    name="PlaceholderExtractor",
-    instructions=_EXTRACTOR_INSTRUCTIONS,
-    model="gpt-5.4-nano",
-    output_type=PlaceholderExtraction,
-)
+_extractor_agent = None
 
 
 def extract_placeholders(
@@ -124,6 +120,8 @@ def extract_placeholders(
     num_sets: int = 3,
 ) -> PlaceholderExtraction:
     """识别 instruction 中的占位符，并生成 num_sets 组测试值。"""
+    from agents import Runner
+
     parts = [f"【指令文本】\n{instruction}"]
     if agent_spec is not None:
         parts.append(
@@ -134,7 +132,7 @@ def extract_placeholders(
         )
     parts.append(f"\n请按要求生成 {num_sets} 组测试场景。")
 
-    result = Runner.run_sync(_extractor_agent, "\n".join(parts))
+    result = Runner.run_sync(_get_extractor_agent(), "\n".join(parts))
     output = result.final_output
     if not isinstance(output, PlaceholderExtraction):
         raise RuntimeError("占位符提取返回了意外结果类型")
@@ -161,9 +159,7 @@ def fill_placeholders(instruction: str, values: dict[str, str]) -> str:
         result = result.replace(f"[{key}]", val)
         result = result.replace(f"{{{{{key}}}}}", val)
         result = result.replace(f"<{key}>", val)
-        # ** 后紧跟 key 且 key 后是单词边界（空格或 *）
-        pattern = rf"\*\*({re.escape(key)})\b"
-        result = re.sub(pattern, f"**{val}", result)
+        result = _replace_markdown_placeholder(result, key, val)
 
     return result
 
@@ -199,6 +195,39 @@ def _normalize_extraction(extraction: PlaceholderExtraction) -> PlaceholderExtra
         placeholders=placeholders,
         sets=normalized_sets,
     )
+
+
+def _replace_markdown_placeholder(text: str, identifier: str, value: str) -> str:
+    """替换 markdown 粗体中的占位符标识符，保留原单位和空格。
+
+    支持：
+    - **X**
+    - **X 单**
+    - **X单**
+    - **name**
+
+    只替换粗体内容起始处的 identifier，自身后的单位/说明原样保留。
+    """
+    pattern = re.compile(
+        rf"(\*\*\s*){re.escape(identifier)}(?![A-Za-z0-9_])",
+    )
+    return pattern.sub(lambda match: f"{match.group(1)}{value}", text)
+
+
+def _get_extractor_agent():
+    global _extractor_agent
+
+    if _extractor_agent is None:
+        from agents import Agent
+
+        _extractor_agent = Agent(
+            name="PlaceholderExtractor",
+            instructions=_EXTRACTOR_INSTRUCTIONS,
+            model="deepseek-v4-flash",
+            output_type=PlaceholderExtraction,
+        )
+
+    return _extractor_agent
 
 
 def _dedupe_placeholders(placeholders: list[Placeholder]) -> list[Placeholder]:

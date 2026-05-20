@@ -8,8 +8,8 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
-if not os.getenv("OPENAI_API_KEY"):
-    raise RuntimeError("缺少 OPENAI_API_KEY")
+if not (os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")):
+    raise RuntimeError("缺少 DEEPSEEK_API_KEY 或 OPENAI_API_KEY")
 
 from src.rule_parser import parse_rules
 from src.rule_validation import print_validation_report, validate_rules

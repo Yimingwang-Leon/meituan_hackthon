@@ -38,7 +38,7 @@
 - 数据建模：`dataclasses` + `pydantic`
 - 持久化：本地 JSON / JSONL（`sessions/`、`reports/`、`memory/`）
 
-模型调用目前基本都写死在代码里，主要使用 `gpt-5.4-nano`：
+模型调用目前基本都写死在代码里，当前主要使用 `deepseek-v4-flash`：
 
 - 规则拆解：`src/rule_parser.py`
 - Agent 结构归纳：`src/agent_spec.py`

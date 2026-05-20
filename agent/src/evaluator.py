@@ -176,7 +176,7 @@ _judge_agent = Agent(
         "只根据提供的对话记录判断，不要推测对话之外的信息。\n"
         "evidence 必须引用具体轮次，例如「第3轮数字人说...」。"
     ),
-    model="gpt-5.4-nano",
+    model="deepseek-v4-flash",
     output_type=JudgeOutput,
 )
 

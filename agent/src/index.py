@@ -12,6 +12,10 @@ from .session import OutboundSession
 from .types import SessionMeta
 
 
+def _has_llm_api_key() -> bool:
+    return bool(os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"))
+
+
 def _load_instruction(source: str | None, instructions_dir: Path) -> tuple[str, str]:
     if not source:
         return OUTBOUND_INSTRUCTIONS, "manual-default"
@@ -41,9 +45,9 @@ def main() -> None:
     project_root = Path(__file__).resolve().parents[1]
     load_dotenv(project_root / ".env")
 
-    if not os.getenv("OPENAI_API_KEY"):
+    if not _has_llm_api_key():
         raise RuntimeError(
-            "缺少 OPENAI_API_KEY，请先在 agent/.env 中填写，或复制 agent/.env.example 为 agent/.env"
+            "缺少 DEEPSEEK_API_KEY 或 OPENAI_API_KEY，请先在 agent/.env 中填写，或复制 agent/.env.example 为 agent/.env"
         )
 
     instructions_dir = project_root / "instructions"

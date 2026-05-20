@@ -74,7 +74,7 @@ _SCENARIO_SELECTOR_INSTRUCTIONS = """\
 
 ## 决策原则
 
-1. 每条规则至少返回 1 个 case_type，且必须包含 normal_trigger。
+1. 每条规则至少返回 1 个 case_type。
 2. 只有当“额外场景会明显改变用户表达方式，并且对验证该规则有独立价值”时，才增加其他 case_type。
 3. 通常只返回 normal_trigger。
 4. “用户明确拒绝 / 取消 / 不继续”这类规则，往往适合多一些场景。
@@ -153,7 +153,7 @@ def _get_scenario_selector_agent():
         _scenario_selector_agent = Agent(
             name="RuleScenarioSelector",
             instructions=_SCENARIO_SELECTOR_INSTRUCTIONS,
-            model="gpt-5.4-nano",
+            model="deepseek-v4-flash",
             output_type=RuleScenarioSelectionList,
         )
 

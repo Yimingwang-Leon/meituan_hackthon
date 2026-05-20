@@ -49,7 +49,7 @@ _AGENT_SPEC_INSTRUCTIONS = """\
 _agent_spec_agent = Agent(
     name="AgentSpecParser",
     instructions=_AGENT_SPEC_INSTRUCTIONS,
-    model="gpt-5.4-nano",
+    model="deepseek-v4-flash",
     output_type=AgentSpec,
 )
 

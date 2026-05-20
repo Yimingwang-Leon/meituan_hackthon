@@ -241,7 +241,7 @@ def _llm_fix_rules(
             "你需要补齐缺失字段、拆分过长描述，让每条规则通过质量校验。"
             "保持 rule_id / rule_type / severity 不变，只修复内容字段。"
         ),
-        model="gpt-5.4-nano",
+        model="deepseek-v4-flash",
         output_type=ParsedRuleList,
     )
 

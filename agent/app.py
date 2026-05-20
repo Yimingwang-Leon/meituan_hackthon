@@ -29,6 +29,10 @@ MAX_TURNS = 15
 SESSIONS_DIR = Path(__file__).parent / "sessions"
 MEMORY_DIR = Path(__file__).parent / "memory"
 
+
+def _has_llm_api_key() -> bool:
+    return bool(os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"))
+
 PERSONA_LABELS = {
     "cooperative": "配合型",
     "suspicious": "警惕型",
@@ -1051,8 +1055,8 @@ with col_btn:
 # 运行流程
 # ═══════════════════════════════════════════════════════════════════════════
 if run_clicked:
-    if not os.getenv("OPENAI_API_KEY"):
-        st.error("缺少 OPENAI_API_KEY，请在 agent/.env 中填写")
+    if not _has_llm_api_key():
+        st.error("缺少 DEEPSEEK_API_KEY 或 OPENAI_API_KEY，请在 agent/.env 中填写")
         st.stop()
 
     with st.spinner("正在解析指令、提取占位符、生成测试场景..."):
