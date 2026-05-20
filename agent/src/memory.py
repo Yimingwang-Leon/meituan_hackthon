@@ -27,7 +27,7 @@ def _serialize_transcript_entry(entry: TranscriptEntry) -> dict[str, str]:
 
 
 def _serialize_rule_result(rule_result: RuleResult) -> dict[str, object]:
-    applicable = rule_result.result != "not_applicable"
+    applicable = rule_result.result in ("pass", "fail")
     is_violation = rule_result.result == "fail"
     return {
         "rule_id": rule_result.rule_id,
@@ -37,6 +37,12 @@ def _serialize_rule_result(rule_result: RuleResult) -> dict[str, object]:
         "judger_result": rule_result.result,
         "applicable": applicable,
         "is_violation": is_violation,
+        "is_trigger_failed": rule_result.result == "trigger_failed",
+        "is_primary": getattr(rule_result, "is_primary", False),
+        "triggered": getattr(rule_result, "triggered", None),
+        "trigger_turn": getattr(rule_result, "trigger_turn", None),
+        "response_turn": getattr(rule_result, "response_turn", None),
+        "evaluated_by": getattr(rule_result, "evaluated_by", "llm_judge"),
         "evidence": rule_result.evidence,
         "confidence": rule_result.confidence,
         "votes": rule_result.votes,
@@ -51,7 +57,10 @@ def build_evaluation_memory_entry(
     memory_session_id = f"{archive.session_id}:{report.persona_type}:{archive.started_at}"
     violation_count = sum(1 for rr in report.rule_results if rr.result == "fail")
     applicable_rule_count = sum(
-        1 for rr in report.rule_results if rr.result != "not_applicable"
+        1 for rr in report.rule_results if rr.result in ("pass", "fail")
+    )
+    trigger_failed_count = sum(
+        1 for rr in report.rule_results if rr.result == "trigger_failed"
     )
 
     return {
@@ -83,6 +92,7 @@ def build_evaluation_memory_entry(
         "has_violation": violation_count > 0,
         "violation_count": violation_count,
         "applicable_rule_count": applicable_rule_count,
+        "trigger_failed_count": trigger_failed_count,
         "transcript": [
             _serialize_transcript_entry(entry) for entry in archive.transcript
         ],

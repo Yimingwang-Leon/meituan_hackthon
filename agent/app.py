@@ -548,9 +548,16 @@ hr {
     font-weight: 700;
     margin-top: 2px;
 }
-.rule-mark.pass { background: var(--success-soft); color: var(--success); border: 1px solid #a7f3d0; }
-.rule-mark.fail { background: var(--danger-soft);  color: var(--danger);  border: 1px solid #fecaca; }
-.rule-mark.na   { background: var(--surface-hi);   color: var(--text-4);  border: 1px solid var(--border); }
+.rule-mark.pass            { background: var(--success-soft); color: var(--success); border: 1px solid #a7f3d0; }
+.rule-mark.fail            { background: var(--danger-soft);  color: var(--danger);  border: 1px solid #fecaca; }
+.rule-mark.na              { background: var(--surface-hi);   color: var(--text-4);  border: 1px solid var(--border); }
+.rule-mark.trigger-failed  { background: var(--warning-soft); color: var(--warning); border: 1px solid #fed7aa; }
+.rule-trigger {
+    font-size: 0.78rem;
+    color: var(--text-3);
+    margin-top: 0.375rem;
+    font-family: var(--mono);
+}
 .rule-text {
     font-size: 0.9rem;
     color: var(--text);
@@ -861,8 +868,18 @@ def _render_session_card(item: dict, report: EvaluationReport) -> None:
             ]
             rows = []
             for rr in visible_rule_results:
-                mark_cls = {"pass": "pass", "fail": "fail", "not_applicable": "na"}[rr.result]
-                mark_char = {"pass": "✓", "fail": "✗", "not_applicable": "—"}[rr.result]
+                mark_cls = {
+                    "pass": "pass",
+                    "fail": "fail",
+                    "not_applicable": "na",
+                    "trigger_failed": "trigger-failed",
+                }[rr.result]
+                mark_char = {
+                    "pass": "✓",
+                    "fail": "✗",
+                    "not_applicable": "—",
+                    "trigger_failed": "⚠",
+                }[rr.result]
                 votes = " ".join(
                     f'<span class="pill pill-neutral">{k}×{v}</span>'
                     for k, v in rr.votes.items()
@@ -870,6 +887,25 @@ def _render_session_card(item: dict, report: EvaluationReport) -> None:
                 evidence = (
                     f'<div class="rule-evidence">{rr.evidence}</div>'
                     if rr.result != "not_applicable" else ""
+                )
+                # 触发信息条
+                trigger_info = ""
+                if rr.rule_type == "conditional" and rr.triggered is not None:
+                    if rr.triggered:
+                        trigger_info = (
+                            f'<div class="rule-trigger">触发于第 {rr.trigger_turn} 轮 · '
+                            f'Agent 响应第 {rr.response_turn} 轮</div>'
+                        )
+                    elif rr.is_primary:
+                        trigger_info = (
+                            '<div class="rule-trigger">⚠ 本场 primary 但未触发：simulator 没演到位</div>'
+                        )
+                primary_tag = (
+                    '<span class="pill pill-brand">primary</span>' if rr.is_primary else ""
+                )
+                method_tag = (
+                    '<span class="pill pill-success">代码检查</span>'
+                    if rr.evaluated_by == "deterministic" else ""
                 )
                 rows.append(
                     f'<div class="rule-item">'
@@ -880,8 +916,11 @@ def _render_session_card(item: dict, report: EvaluationReport) -> None:
                     f'      <span class="id">{rr.rule_id}</span>'
                     f'      {_sev_pill(rr.severity)}'
                     f'      {_conf_pill(rr.confidence)}'
+                    f'      {primary_tag}'
+                    f'      {method_tag}'
                     f'      {votes}'
                     f'    </div>'
+                    f'    {trigger_info}'
                     f'    {evidence}'
                     f'  </div>'
                     f'</div>'
@@ -1056,6 +1095,27 @@ if run_clicked:
         unsafe_allow_html=True,
     )
 
+    # 规则质量校验报告
+    validation_issues = simulation_plan.validation_issues
+    if validation_issues:
+        errors = [i for i in validation_issues if i.level == "error"]
+        warnings = [i for i in validation_issues if i.level == "warning"]
+        header = f"⚠️ 规则质量校验：{len(errors)} 错 · {len(warnings)} 警"
+        with st.expander(header, expanded=bool(errors)):
+            st.caption(
+                "💡 规则质量校验在 rule_parser 后自动跑。"
+                "Error 触发自动修复（重新调用 LLM 补齐），warning 仅提示。"
+            )
+            for issue in validation_issues:
+                badge = "🔴 ERROR" if issue.level == "error" else "🟡 WARN"
+                st.markdown(
+                    f"{badge} · **{issue.rule_id}** · `{issue.field}` — {issue.message}"
+                )
+                if issue.detail:
+                    st.caption(f"↳ {issue.detail[:160]}")
+    else:
+        st.success(f"✅ {len(parsed_rules)} 条规则全部通过质量校验")
+
     # 显示场景组概览
     if placeholders:
         with st.expander(f"📋 {len(sub_plans)} 组占位符场景明细", expanded=False):
@@ -1205,6 +1265,8 @@ if st.session_state.run_complete and st.session_state.reports:
     avg_conf = sum(r.mean_confidence for r in reports) / total
 
     _section_head("04", "评测<em>仪表板</em>", "全局指标汇总")
+
+    # 主指标行
     st.markdown(
         f'<div class="bento">'
         f'{_bento_cell("综合得分", f"{avg_score:.0%}", f"共 {total} 个会话平均", feature=True)}'
@@ -1213,6 +1275,46 @@ if st.session_state.run_complete and st.session_state.reports:
         f'{_bento_cell("会话总数", f"{total}", "场景组 × 目标用例")}'
         f'</div>',
         unsafe_allow_html=True,
+    )
+
+    # 模拟器质量行
+    trigger_fail_label = (
+        f"{coverage.trigger_failed_count}/{coverage.primary_attempted} primary 失败"
+        if coverage.primary_attempted else "无 primary case"
+    )
+    st.markdown(
+        f'<div class="bento">'
+        f'{_bento_cell("触发失败率", f"{coverage.trigger_failure_rate:.0%}", trigger_fail_label, feature=True)}'
+        f'{_bento_cell("Primary 总数", f"{coverage.primary_attempted}", "本次指派给具体规则的 session 数")}'
+        f'{_bento_cell("Primary 失败数", f"{coverage.trigger_failed_count}", "应该触发但 simulator 没演到位")}'
+        f'{_bento_cell("覆盖广度", f"{coverage.triggered_conditional}", "至少被触发一次的条件规则数")}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "ℹ️ **触发失败率** 反映 simulator 在被指派的 case 上的失败比例。"
+        "数字越低，说明 test_case_generator + persona 设计越准。"
+    )
+
+    # Evaluator 类型分布行
+    det_count = sum(
+        1 for r in parsed_rules if r.checks
+    )
+    llm_count = len(parsed_rules) - det_count
+    det_rate = det_count / len(parsed_rules) if parsed_rules else 0
+    det_label = "无可代码化规则" if det_count == 0 else f"{det_count}/{len(parsed_rules)} 条规则走代码"
+    st.markdown(
+        f'<div class="bento">'
+        f'{_bento_cell("代码检查覆盖率", f"{det_rate:.0%}", det_label, feature=True)}'
+        f'{_bento_cell("代码 checker 规则", f"{det_count}", "确定性 / 0 LLM 调用 / 100% 准确")}'
+        f'{_bento_cell("LLM judge 规则", f"{llm_count}", "需语义判断，靠多采样置信度")}'
+        f'{_bento_cell("LLM 调用节省", f"{det_count * total}", "估算 = 代码 checker 规则数 × session 数")}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "ℹ️ **Hybrid Evaluator**：确定性规则（字数、关键词、PII）用代码 100% 准确判定，"
+        "语义规则才走 LLM judge + 多采样投票。"
     )
 
     _section_head("05", "规则 × <em>测试画像</em>热力图", "红=低通过率 / 绿=高通过率")
@@ -1239,7 +1341,7 @@ if st.session_state.run_complete and st.session_state.reports:
                     f'      <span class="id">{r.rule_id}</span>'
                     f'      {_sev_pill(r.severity)}'
                     f'    </div>'
-                    f'    <div class="rule-evidence">{r.evaluation_hint}</div>'
+                    f'    <div class="rule-evidence">触发：{r.trigger_condition or "（全程适用）"}<br/>期望：{r.expected_behavior}</div>'
                     f'  </div>'
                     f'</div>'
                 )
