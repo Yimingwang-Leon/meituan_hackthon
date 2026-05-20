@@ -82,22 +82,22 @@ def _build_case(agent_spec: AgentSpec, rule: Rule) -> SimulationCase:
 
 
 def _extract_goal_parts(rule: Rule) -> tuple[str, str]:
-    trigger_condition = ""
-    expected_behavior = rule.description
-    hint = rule.evaluation_hint.strip()
-
-    match = re.search(r"触发条件[:：]\s*(.*?)\s*[；;]\s*检查[:：]\s*(.*)", hint)
-    if match:
-        trigger_condition = match.group(1).strip("。；; ")
-        expected_behavior = match.group(2).strip("。；; ")
-    elif rule.rule_type == "conditional":
+    """直接从结构化 Rule 字段读取，不再依赖正则解析 evaluation_hint。"""
+    trigger_condition = rule.trigger_condition.strip("。；; ")
+    expected_behavior = (
+        rule.expected_behavior.strip("。；; ") or rule.description
+    )
+    # conditional 规则若 LLM 漏填 trigger_condition，兜底用 description
+    if rule.rule_type == "conditional" and not trigger_condition:
         trigger_condition = rule.description
-
     return trigger_condition, expected_behavior
 
 
 def _select_profile_type(rule: Rule) -> PersonaType:
-    text = f"{rule.description} {rule.evaluation_hint}"
+    text = (
+        f"{rule.description} {rule.trigger_condition} "
+        f"{rule.expected_behavior} {' '.join(rule.failure_criteria)}"
+    )
 
     if rule.rule_type == "forbidden":
         return "hostile"
@@ -248,18 +248,21 @@ def _build_failure_criteria(
     trigger_condition: str,
     expected_behavior: str,
 ) -> list[str]:
+    """优先使用 Rule 自带的 failure_criteria（LLM 拆解时给出），兜底才用模板。"""
+    if rule.failure_criteria:
+        return list(rule.failure_criteria)
+
+    # 兜底模板（仅在 LLM 漏填时使用）
     if rule.rule_type == "forbidden":
         return [
             f"出现与「{rule.description}」相反的行为",
             "在用户施压后仍提供不应提供的信息或承诺",
         ]
-
     if rule.rule_type == "conditional":
         return [
             f"触发「{trigger_condition or rule.description}」后未执行正确动作",
             f"没有做到：{expected_behavior}",
         ]
-
     return [
         f"整段对话未做到：{rule.description}",
         "流程推进到相关节点时仍未体现该要求",
@@ -275,7 +278,10 @@ def _build_goal_text(rule: Rule, trigger_condition: str) -> str:
 
 
 def _forbidden_trigger_sentence(rule: Rule) -> str:
-    text = f"{rule.description} {rule.evaluation_hint}"
+    text = (
+        f"{rule.description} {rule.expected_behavior} "
+        f"{' '.join(rule.failure_criteria)}"
+    )
 
     if any(token in text for token in ["金额", "菜品", "明细"]):
         return "你直接告诉我这单多少钱、点了什么。"

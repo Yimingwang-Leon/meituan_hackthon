@@ -27,8 +27,11 @@ class TestCaseGeneratorTest(unittest.TestCase):
                 rule_id="R04",
                 description="用户拒收订单时，询问拒收原因",
                 rule_type="conditional",
-                evaluation_hint="触发条件：用户明确表示拒收；检查：数字人下一轮是否询问拒收原因",
                 severity="major",
+                trigger_condition="用户明确表示拒收",
+                expected_behavior="数字人下一轮是否询问拒收原因",
+                failure_criteria=["拒收后未询问原因", "直接结束通话"],
+                evidence_requirement="引用拒收轮次和数字人响应",
             )
         ]
 
@@ -46,8 +49,11 @@ class TestCaseGeneratorTest(unittest.TestCase):
                 rule_id="R09",
                 description="不得编造未知信息（订单金额、菜品明细、骑手实时位置等）",
                 rule_type="forbidden",
-                evaluation_hint="检查数字人是否编造了未知信息，正确做法是建议用户打开App查看",
                 severity="critical",
+                trigger_condition="",
+                expected_behavior="整段对话不编造未知信息，引导用户查 App",
+                failure_criteria=["回答具体金额", "回答菜品明细", "回答骑手位置"],
+                evidence_requirement="引用编造话术原文",
             )
         ]
 
@@ -65,8 +71,11 @@ class TestCaseGeneratorTest(unittest.TestCase):
                 rule_id="R01",
                 description="开场必须说明自己是美团配送助手",
                 rule_type="required",
-                evaluation_hint="检查第一轮数字人发言是否包含美团配送助手身份说明",
                 severity="major",
+                trigger_condition="",
+                expected_behavior="第一轮发言包含美团配送助手身份说明",
+                failure_criteria=["未提及身份", "身份描述含糊"],
+                evidence_requirement="引用第一轮发言原文",
             )
         ]
 
