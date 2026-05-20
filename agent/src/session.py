@@ -9,7 +9,7 @@ from agents import Runner, trace
 
 from agents import Agent
 
-from .agent import AgentTurnOutput, build_order_context, outbound_agent
+from .agent import AgentTurnOutput, outbound_agent
 from .types import LoadedOrder, SessionArchive, TranscriptEntry, TurnResult
 
 
@@ -27,7 +27,8 @@ class OutboundSession:
         self._agent = agent or outbound_agent
         self._started_at = _now_iso()
         self._transcript: list[TranscriptEntry] = []
-        self._history: list[Any] = [_user_message(build_order_context(loaded_order.order))]
+        # 不再注入订单上下文。Agent 的 system prompt 已含完整上下文（填充后的 instruction）
+        self._history: list[Any] = []
         self._is_closed = False
         self._end_reason: str | None = None
 
@@ -41,8 +42,7 @@ class OutboundSession:
 
     def start(self) -> TurnResult:
         opening_prompt = (
-            "现在开始一通新的订单外呼模拟。"
-            "你必须主动先说第一句话，完成开场问候、身份说明和来电目的说明。"
+            "电话已接通。请按你的角色、任务和开场词主动说出第一句话。"
         )
         return self._run_turn(opening_prompt)
 

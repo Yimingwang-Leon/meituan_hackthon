@@ -64,6 +64,8 @@ def build_evaluation_memory_entry(
         "simulator_label": archive.simulator_label,
         "test_case_id": archive.test_case_id,
         "target_rule_id": archive.target_rule_id,
+        "set_id": report.set_id,
+        "set_label": report.set_label,
         "source_file": archive.source_file,
         "session_started_at": archive.started_at,
         "session_ended_at": archive.ended_at,

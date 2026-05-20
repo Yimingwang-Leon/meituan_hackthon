@@ -11,7 +11,7 @@ from src.agent import OUTBOUND_INSTRUCTIONS, make_outbound_agent
 from src.agent_spec import AgentSpec
 from src.orders import load_pending_orders
 from src.session import OutboundSession
-from src.simulation_plan import build_simulation_plan
+from src.simulation_plan import SimulationPlan, SubPlan, build_simulation_plan
 from src.simulator import UserSimulator
 from src.test_case_generator import SimulationCase
 from src.types import LoadedOrder
@@ -30,33 +30,39 @@ def _load_scenario_instructions(instructions_dir: Path) -> dict[str, str]:
 def run_session(
     loaded_order: LoadedOrder,
     simulation_case: SimulationCase,
-    instruction: str,
+    sub_plan: SubPlan,
     agent_spec: AgentSpec,
     sessions_dir: Path,
 ) -> None:
     print(
-        f"\n[{simulation_case.target_rule_id}/{simulation_case.profile_type}] "
+        f"\n[{sub_plan.set_id} · {simulation_case.target_rule_id}/{simulation_case.profile_type}] "
         f"{loaded_order.order.order_id}"
     )
 
-    agent = make_outbound_agent(instruction)
+    agent = make_outbound_agent(sub_plan.filled_instruction)
     outbound = OutboundSession(loaded_order, agent=agent)
     simulator = UserSimulator(loaded_order, simulation_case, agent_spec)
-    session_label = f"{simulation_case.target_rule_id} · {simulation_case.profile_type}"
+    session_label = (
+        f"{sub_plan.set_id} · {simulation_case.target_rule_id} · "
+        f"{simulation_case.profile_type}"
+    )
+
+    def _archive():
+        outbound.save_archive(
+            sessions_dir,
+            "agent_end",
+            persona_type=simulation_case.profile_type,
+            simulator_label=session_label,
+            test_case_id=simulation_case.test_id,
+            target_rule_id=simulation_case.target_rule_id,
+        )
 
     agent_turn = outbound.start()
     print(f"  数字人: {agent_turn.reply_text}")
 
     for _ in range(MAX_TURNS):
         if agent_turn.should_end:
-            outbound.save_archive(
-                sessions_dir,
-                "agent_end",
-                persona_type=simulation_case.profile_type,
-                simulator_label=session_label,
-                test_case_id=simulation_case.test_id,
-                target_rule_id=simulation_case.target_rule_id,
-            )
+            _archive()
             return
 
         user_turn = simulator.reply(agent_turn.reply_text)
@@ -64,27 +70,13 @@ def run_session(
 
         if user_turn.should_end:
             outbound.record_user(user_turn.reply_text)
-            outbound.save_archive(
-                sessions_dir,
-                "agent_end",
-                persona_type=simulation_case.profile_type,
-                simulator_label=session_label,
-                test_case_id=simulation_case.test_id,
-                target_rule_id=simulation_case.target_rule_id,
-            )
+            _archive()
             return
 
         agent_turn = outbound.reply(user_turn.reply_text)
         print(f"  数字人: {agent_turn.reply_text}")
 
-    outbound.save_archive(
-        sessions_dir,
-        "agent_end",
-        persona_type=simulation_case.profile_type,
-        simulator_label=session_label,
-        test_case_id=simulation_case.test_id,
-        target_rule_id=simulation_case.target_rule_id,
-    )
+    _archive()
     print(f"  [警告] 达到最大轮次 {MAX_TURNS}，强制结束")
 
 
@@ -99,8 +91,9 @@ def main() -> None:
     sessions_dir = project_root / "sessions"
     instructions_dir = project_root / "instructions"
 
-    # 可选过滤：python auto_main.py confirm_001
+    # 可选参数：python auto_main.py confirm_001 3
     order_id_filter = sys.argv[1] if len(sys.argv) > 1 else None
+    num_sets = int(sys.argv[2]) if len(sys.argv) > 2 else 3
 
     scenario_instructions = _load_scenario_instructions(instructions_dir)
 
@@ -108,20 +101,22 @@ def main() -> None:
     if order_id_filter:
         orders = [o for o in orders if o.order.order_id == order_id_filter]
     if not orders:
-        print(f"未找到匹配的订单。")
+        print("未找到匹配的订单。")
         return
 
-    plan_cache: dict[str, tuple[AgentSpec, list[SimulationCase]]] = {}
+    plan_cache: dict[str, SimulationPlan] = {}
     for order in orders:
         instruction = scenario_instructions.get(
             order.order.scenario or "", OUTBOUND_INSTRUCTIONS
         )
         if instruction not in plan_cache:
-            plan = build_simulation_plan(instruction)
-            plan_cache[instruction] = (plan.agent_spec, plan.test_cases)
-        agent_spec, test_cases = plan_cache[instruction]
-        for simulation_case in test_cases:
-            run_session(order, simulation_case, instruction, agent_spec, sessions_dir)
+            print(f"\n构建 simulation plan（{num_sets} 个 placeholder set）...")
+            plan_cache[instruction] = build_simulation_plan(instruction, num_sets=num_sets)
+
+        plan = plan_cache[instruction]
+        for sub_plan in plan.sub_plans:
+            for simulation_case in sub_plan.test_cases:
+                run_session(order, simulation_case, sub_plan, plan.agent_spec, sessions_dir)
 
     print("\n所有订单处理完成。")
 

@@ -32,6 +32,8 @@ class EvaluationReport:
     persona_type: str
     rule_results: list[RuleResult]
     score: float
+    set_id: str | None = None
+    set_label: str | None = None
 
     @property
     def mean_confidence(self) -> float:
@@ -40,8 +42,9 @@ class EvaluationReport:
         return sum(r.confidence for r in self.rule_results) / len(self.rule_results)
 
     def summary(self) -> str:
+        set_tag = f"  Set：{self.set_id}" if self.set_id else ""
         lines = [
-            f"订单：{self.order_id}  Persona：{self.persona_type}  "
+            f"订单：{self.order_id}  Persona：{self.persona_type}{set_tag}  "
             f"得分：{self.score:.0%}  平均置信度：{self.mean_confidence:.0%}",
             "",
         ]
@@ -163,6 +166,8 @@ def evaluate_session(
     rules: list[Rule] | None = None,
     n_samples: int = JUDGE_SAMPLES,
     max_workers: int = 16,  # 保留参数兼容，但已不使用
+    set_id: str | None = None,
+    set_label: str | None = None,
 ) -> EvaluationReport:
     transcript_text = _format_transcript(archive)
     active_rules = rules if rules is not None else RULES
@@ -195,4 +200,6 @@ def evaluate_session(
         persona_type=persona_type,
         rule_results=rule_results,
         score=score,
+        set_id=set_id,
+        set_label=set_label,
     )

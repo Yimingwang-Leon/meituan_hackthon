@@ -85,9 +85,6 @@ def _build_simulator_instructions(
 - domain: {agent_spec.domain}
 - main_task: {agent_spec.main_task}
 
-【业务上下文】
-{_build_business_context(loaded_order)}
-
 【本次用户画像】
 - profile_type: {profile.profile_type}
 - attitude: {profile.attitude}
@@ -131,25 +128,6 @@ def _build_simulator_instructions(
 2. 不要输出分析、标签、JSON、说明或括号解释。
 3. should_end=true 表示用户准备挂断或对话可以自然结束。
 """
-
-
-def _build_business_context(loaded_order: LoadedOrder) -> str:
-    order = loaded_order.order
-    lines = [
-        f"- 用户称呼: {order.user_name}",
-        f"- 订单编号: {order.order_id}",
-        f"- 预计送达时间: {order.eta}",
-        f"- 配送地址: {order.address}",
-    ]
-    if order.store_name:
-        lines.append(f"- 商家名称: {order.store_name}")
-    if order.recorded_address:
-        lines.append(f"- 系统记录地址: {order.recorded_address}")
-    if order.delivery_note:
-        lines.append(f"- 配送备注: {order.delivery_note}")
-    if order.task_context:
-        lines.append(f"- 任务背景: {order.task_context}")
-    return "\n".join(lines)
 
 
 def _format_list(items: list[str]) -> str:

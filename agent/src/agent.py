@@ -3,8 +3,6 @@ from __future__ import annotations
 from agents import Agent
 from pydantic import BaseModel, Field
 
-from .types import OrderRecord
-
 
 OUTBOUND_INSTRUCTIONS = """你是一名美团外呼数字人，负责根据给定的订单信息，与用户进行多轮对话，并尽量完成业务目标。
 
@@ -74,22 +72,3 @@ def make_outbound_agent(instructions: str) -> Agent:
 
 
 outbound_agent = make_outbound_agent(OUTBOUND_INSTRUCTIONS)
-
-
-def build_order_context(order: OrderRecord) -> str:
-    lines = [
-        "【当前外呼订单】",
-        f"用户称呼：{order.user_name}",
-        f"订单编号：{order.order_id}",
-    ]
-    if order.store_name:
-        lines.append(f"商家名称：{order.store_name}")
-    lines.append(f"预计送达时间：{order.eta}")
-    lines.append(f"配送地址：{order.address}")
-    if order.recorded_address:
-        lines.append(f"系统记录地址（需核实）：{order.recorded_address}")
-    if order.delivery_note:
-        lines.append(f"配送备注：{order.delivery_note}")
-    if order.task_context:
-        lines.append(f"外呼背景：{order.task_context}")
-    return "\n".join(lines)
