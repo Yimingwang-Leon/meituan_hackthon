@@ -25,39 +25,39 @@ class Rule:
 RULES: list[Rule] = [
     Rule(
         rule_id="R01",
-        description="开场必须说明自己是美团配送助手",
+        description="开场必须明确说明自己的身份或角色",
         rule_type="required",
-        evaluation_hint="查看第一轮数字人发言是否提到美团或配送助手身份",
+        evaluation_hint="查看第一轮数字人发言是否提到自己的身份、角色或所属方",
     ),
     Rule(
         rule_id="R02",
-        description="必须说明来电目的是确认订单是否方便接收",
+        description="必须说明本次对话的目的",
         rule_type="required",
-        evaluation_hint="查看数字人是否在对话中说明了来电原因",
+        evaluation_hint="查看数字人是否在对话中明确说明了发起对话的原因",
     ),
     Rule(
         rule_id="R03",
-        description="用户表示方便时，确认并提醒保持电话畅通",
+        description="用户明确配合时，应确认并推进下一步",
         rule_type="conditional",
-        evaluation_hint="若用户表示方便接收，检查数字人是否确认并提醒保持电话畅通",
+        evaluation_hint="若用户明确表示可以继续，检查数字人是否进行了确认并继续推进任务",
     ),
     Rule(
         rule_id="R04",
-        description="用户不方便时，询问新的可接收时间",
+        description="用户表示当前不方便时，应询问替代安排",
         rule_type="conditional",
-        evaluation_hint="若用户表示不方便，检查数字人是否询问了新的可接收时间",
+        evaluation_hint="若用户表示当前不方便，检查数字人是否询问了新的时间、条件或替代方案",
     ),
     Rule(
         rule_id="R05",
-        description="用户给出新时间时，复述该时间并确认已记录",
+        description="用户给出新的关键信息时，应复述并确认",
         rule_type="conditional",
-        evaluation_hint="若用户提供了新时间，检查数字人是否复述该时间并说明已记录",
+        evaluation_hint="若用户提供了新的时间、地点或其他关键信息，检查数字人是否复述并确认",
     ),
     Rule(
         rule_id="R06",
-        description="用户拒绝接收订单时，询问拒收原因",
+        description="用户明确拒绝继续时，应询问原因或确认拒绝",
         rule_type="conditional",
-        evaluation_hint="若用户明确拒绝接收，检查数字人是否询问了拒收原因",
+        evaluation_hint="若用户明确表示拒绝、取消或不继续，检查数字人是否询问原因或确认拒绝意图",
     ),
     Rule(
         rule_id="R07",
@@ -73,9 +73,9 @@ RULES: list[Rule] = [
     ),
     Rule(
         rule_id="R09",
-        description="不得编造未知信息（订单金额、菜品明细、骑手实时位置等）",
+        description="不得编造未知信息",
         rule_type="forbidden",
-        evaluation_hint="检查数字人是否编造了它不应知道的信息，正确做法是建议用户打开App查看",
+        evaluation_hint="检查数字人是否编造了它不应知道的信息；若无法确认，应明确说明不知道或无法查询",
     ),
     Rule(
         rule_id="R10",

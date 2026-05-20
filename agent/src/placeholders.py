@@ -73,7 +73,7 @@ _EXTRACTOR_INSTRUCTIONS = """\
 
 常见占位符格式：
 - ${name}                变量语法
-- **X**, **X 单**, **Y 天**  markdown 加粗的单字母（常带单位）
+- **X**, **X 单**, **Y 天**  markdown 加粗的单字母（常带单位，不同单位的相同符号算一个变量）
 - [name], {{name}}, <name>   方括号/双花括号/尖括号
 
 每个占位符必须给出：
@@ -138,7 +138,7 @@ def extract_placeholders(
     output = result.final_output
     if not isinstance(output, PlaceholderExtraction):
         raise RuntimeError("占位符提取返回了意外结果类型")
-    return output
+    return _normalize_extraction(output)
 
 
 def fill_placeholders(instruction: str, values: dict[str, str]) -> str:
@@ -181,3 +181,59 @@ def validate_placeholder_value(p: Placeholder, value: str) -> bool:
     if p.value_type == PlaceholderType.AMOUNT:
         return value.replace(".", "", 1).lstrip("-").isdigit()
     return True
+
+
+def _normalize_extraction(extraction: PlaceholderExtraction) -> PlaceholderExtraction:
+    placeholders = _dedupe_placeholders(extraction.placeholders)
+    ordered_ids = [placeholder.identifier for placeholder in placeholders]
+    normalized_sets = [
+        PlaceholderSet(
+            set_id=placeholder_set.set_id,
+            label=placeholder_set.label,
+            scenario_hint=placeholder_set.scenario_hint,
+            values=_dedupe_placeholder_values(placeholder_set.values, ordered_ids),
+        )
+        for placeholder_set in extraction.sets
+    ]
+    return PlaceholderExtraction(
+        placeholders=placeholders,
+        sets=normalized_sets,
+    )
+
+
+def _dedupe_placeholders(placeholders: list[Placeholder]) -> list[Placeholder]:
+    deduped: dict[str, Placeholder] = {}
+    ordered_ids: list[str] = []
+
+    for placeholder in placeholders:
+        identifier = placeholder.identifier.strip()
+        if not identifier:
+            continue
+        if identifier not in deduped:
+            deduped[identifier] = placeholder
+            ordered_ids.append(identifier)
+            continue
+        if placeholder.confidence > deduped[identifier].confidence:
+            deduped[identifier] = placeholder
+
+    return [deduped[identifier] for identifier in ordered_ids]
+
+
+def _dedupe_placeholder_values(
+    values: list[PlaceholderValue],
+    ordered_ids: list[str],
+) -> list[PlaceholderValue]:
+    deduped: dict[str, PlaceholderValue] = {}
+    extras_in_order: list[str] = []
+
+    for value in values:
+        identifier = value.identifier.strip()
+        if not identifier:
+            continue
+        if identifier not in deduped:
+            if identifier not in ordered_ids:
+                extras_in_order.append(identifier)
+            deduped[identifier] = value
+
+    identifiers = ordered_ids + [identifier for identifier in extras_in_order if identifier not in ordered_ids]
+    return [deduped[identifier] for identifier in identifiers if identifier in deduped]

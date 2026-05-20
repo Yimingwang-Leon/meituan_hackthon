@@ -1,6 +1,6 @@
-# 美团外呼数字人评测系统
+# 对话 Agent 评测系统
 
-针对外呼数字人任务指令遵循效果的自动评估系统。输入一条任务指令，系统自动拆解原子规则、模拟多种用户场景对话、多采样 LLM 评判，输出**可解释、可量化、可衡量可靠性**的评测报告。
+针对任务型对话 Agent 指令遵循效果的自动评估系统。输入一条任务指令，系统自动拆解原子规则、模拟多种用户场景对话、多采样 LLM 评判，输出**可解释、可量化、可衡量可靠性**的评测报告。
 
 ## 系统流程
 
@@ -16,7 +16,7 @@
   user simulator（7 种 Persona）
 ```
 
-**关键设计原则**：呼出 agent 只看原始 instruction，不接触评测规则，避免"对着答案答题"。
+**关键设计原则**：被测 agent 只看原始 instruction，不接触评测规则，避免"对着答案答题"。
 
 ## 评测能力矩阵
 
@@ -31,19 +31,17 @@
 
 ```
 agent/
-├── orders/          # 待测订单 JSON（8 条，覆盖 5 种场景）
-├── instructions/    # 各场景的任务指令 + 人工验证用 criteria
+├── instructions/    # 示例任务指令 JSON
 ├── memory/          # 逐次评测记忆（transcript + judger 判断）
 ├── sessions/        # 自动生成的对话归档
 ├── src/
 │   ├── rule_parser.py   # 指令 → 原子规则（LLM 拆解）
-│   ├── agent.py         # 外呼数字人（被测对象）
+│   ├── agent.py         # 被测对话 Agent 封装
 │   ├── simulator.py     # 用户模拟器
 │   ├── persona.py       # 7 种 Persona 定义
 │   ├── evaluator.py     # 多采样 LLM Judge，按 severity 加权 + 触发覆盖率
 │   ├── memory.py        # 评测记忆落盘（JSONL）
 │   ├── session.py       # 单次对话会话管理
-│   ├── orders.py        # 订单加载
 │   ├── rules.py         # Rule 数据类 + severity 权重
 │   └── types.py         # 共用数据类型
 ├── app.py           # Streamlit 可视化界面（推荐入口）
@@ -76,7 +74,7 @@ cp agent/.env.example agent/.env
 
 页面包含 8 个编号章节：
 
-1. **任务指令** — 粘贴任意外呼数字人 prompt
+1. **任务指令** — 粘贴任意任务型对话 Agent prompt
 2. **解析规则** — Bento 卡片展示规则总数 / 必做 / 条件 / 禁止
 3. **实时执行** — 进度条 + 每个 session 完成后立即展示对话和评测
 4. **评测仪表板** — 综合得分 / 条件覆盖率 / 置信度 / 会话数
@@ -85,16 +83,18 @@ cp agent/.env.example agent/.env
 7. **模拟器覆盖度** — 未触发的条件规则 + 各角色触发了哪些规则
 8. **会话归档** — 逐 session 的对话记录 + 规则评测明细
 
-侧边栏可控制：订单选择 / 角色勾选 / 评测深度（1-3 次采样）。
+侧边栏可控制：角色勾选 / 评测深度（1-3 次采样）/ 占位符场景数。
 
 **方式二：命令行**
 
 ```bash
 cd agent
 
-# 跑对话（可指定单条订单）
-python auto_main.py                  # 全部订单 × 7 Persona
-python auto_main.py confirm_001      # 仅指定订单
+# 跑对话
+python auto_main.py
+python auto_main.py instructions/confirm.json 3
+python auto_main.py confirm 2
+python auto_main.py "你是一名..."
 
 # 评估所有已保存的对话
 python evaluate_main.py
@@ -109,21 +109,15 @@ python test_parser.py
 
 对比输出规则与 `instructions/*.json` 中的 `failure_criteria`，人工判断拆解质量。
 
-## 订单格式
+## 输入来源
 
-```json
-{
-  "userName": "王先生",
-  "orderId": "confirm_001",
-  "eta": "2026-05-11 19:30",
-  "address": "上海市杨浦区某小区",
-  "scenario": "confirm",
-  "storeName": "老上海本帮菜",
-  "deliveryNote": "无门铃，请电话联系"
-}
-```
+系统不再依赖订单数据集。测试输入来自三部分：
 
-`scenario` 字段对应 `instructions/` 下的同名 JSON，命令行模式下用于加载对应指令。
+1. 原始 instruction
+2. instruction 中自动识别并填充的 placeholder sets
+3. 根据解析规则自动生成的 `SimulationCase`
+
+如果 prompt 中存在占位符，系统会自动生成多组 `scenario_context`，并同时提供给被测 Agent 与用户模拟器。
 
 ## 评分机制
 

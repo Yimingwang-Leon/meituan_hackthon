@@ -19,15 +19,14 @@ from src.evaluator import (
     evaluate_session,
 )
 from src.memory import append_evaluation_memory
-from src.orders import load_pending_orders
 from src.persona import ALL_PERSONAS
 from src.session import OutboundSession
 from src.simulation_plan import build_simulation_plan
 from src.simulator import UserSimulator
+from src.types import SessionMeta
 
 MAX_TURNS = 15
 SESSIONS_DIR = Path(__file__).parent / "sessions"
-ORDERS_DIR = Path(__file__).parent / "orders"
 MEMORY_DIR = Path(__file__).parent / "memory"
 
 PERSONA_LABELS = {
@@ -41,7 +40,7 @@ PERSONA_LABELS = {
 }
 
 st.set_page_config(
-    page_title="外呼数字人评测系统",
+    page_title="对话 Agent 评测系统",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -831,12 +830,19 @@ def _render_session_card(item: dict, report: EvaluationReport) -> None:
     persona_label = _persona_label(report.persona_type)
     session_label = item.get("simulator_label") or persona_label
     head = (
-        f"{report.order_id} · {session_label}"
+        f"{session_label}"
         f"   ·   {_badge(report.score)} {report.score:.0%}"
         f"   ·   置信度 {report.mean_confidence:.0%}"
     )
 
     with st.expander(head, expanded=False):
+        scenario_context = item.get("scenario_context") or {}
+        if scenario_context:
+            context_text = "  ·  ".join(
+                f"`{key}` = `{value}`"
+                for key, value in scenario_context.items()
+            )
+            st.caption(f"场景上下文：{context_text}")
         col_l, col_r = st.columns([1, 1.15])
 
         with col_l:
@@ -848,8 +854,13 @@ def _render_session_card(item: dict, report: EvaluationReport) -> None:
 
         with col_r:
             st.markdown('<div class="subhead">规则评测</div>', unsafe_allow_html=True)
+            target_rule_id = item.get("target_rule_id")
+            visible_rule_results = [
+                rr for rr in report.rule_results
+                if not target_rule_id or rr.rule_id == target_rule_id
+            ]
             rows = []
-            for rr in report.rule_results:
+            for rr in visible_rule_results:
                 mark_cls = {"pass": "pass", "fail": "fail", "not_applicable": "na"}[rr.result]
                 mark_char = {"pass": "✓", "fail": "✗", "not_applicable": "—"}[rr.result]
                 votes = " ".join(
@@ -875,6 +886,8 @@ def _render_session_card(item: dict, report: EvaluationReport) -> None:
                     f'  </div>'
                     f'</div>'
                 )
+            if target_rule_id and len(report.rule_results) > len(visible_rule_results):
+                st.caption(f"当前卡片仅展示目标规则 `{target_rule_id}` 的评测结果。")
             st.markdown(f'<div class="rule-list">{"".join(rows)}</div>', unsafe_allow_html=True)
 
 
@@ -885,18 +898,6 @@ with st.sidebar:
     st.markdown(
         '<div class="brand-mark"><span class="dot"></span>评测控制台</div>',
         unsafe_allow_html=True,
-    )
-
-    all_orders = load_pending_orders(ORDERS_DIR)
-    order_options = [o.order.order_id for o in all_orders]
-
-    st.markdown("### 订单")
-    selected_order_ids = st.multiselect(
-        " ",
-        order_options,
-        default=order_options[:1] if order_options else [],
-        label_visibility="collapsed",
-        placeholder="请选择待评测订单...",
     )
 
     st.markdown("### 测试画像")
@@ -939,8 +940,8 @@ with st.sidebar:
     st.markdown(
         f'<div class="side-stat">'
         f'  <div class="label">运行范围</div>'
-        f'  <div class="value">{len(selected_order_ids)} 个订单</div>'
-        f'  <div class="hint">{len(selected_personas)} 个画像筛选，实际会话数按解析规则生成</div>'
+        f'  <div class="value">单 Prompt 评测</div>'
+        f'  <div class="hint">{len(selected_personas)} 个画像筛选，最多展开 {num_placeholder_sets} 组占位符场景</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -950,7 +951,7 @@ with st.sidebar:
 # Hero
 # ═══════════════════════════════════════════════════════════════════════════
 st.markdown(
-    '<div class="brand-mark"><span class="dot"></span>美团 · 履约外呼数字人评测系统</div>',
+    '<div class="brand-mark"><span class="dot"></span>对话 Agent 指令遵循评测系统</div>',
     unsafe_allow_html=True,
 )
 
@@ -962,7 +963,7 @@ st.markdown(
             <em>指令遵循能力</em>。
         </h1>
         <p class="hero-sub">
-            粘贴任意外呼任务指令，系统自动拆解为原子规则，并为每条规则生成目标驱动的用户测试用例，
+            粘贴任意任务型对话 Agent 指令，系统自动拆解为原子规则，并为每条规则生成目标驱动的用户测试用例，
             通过多采样 LLM 评判，输出可解释、可量化的评测报告。
         </p>
         <div class="hero-meta">
@@ -988,7 +989,7 @@ st.markdown(
 # ═══════════════════════════════════════════════════════════════════════════
 # 01 · 任务指令
 # ═══════════════════════════════════════════════════════════════════════════
-_section_head("01", "任务<em>指令</em>", "粘贴任意外呼数字人 prompt")
+_section_head("01", "任务<em>指令</em>", "粘贴任意任务型对话 Agent prompt")
 
 instructions = st.text_area(
     " ",
@@ -1002,7 +1003,7 @@ with col_btn:
     run_clicked = st.button(
         "▸  开始评测",
         type="primary",
-        disabled=not selected_personas or not selected_order_ids,
+        disabled=not selected_personas,
         width="stretch",
     )
 
@@ -1015,14 +1016,13 @@ if run_clicked:
         st.error("缺少 OPENAI_API_KEY，请在 agent/.env 中填写")
         st.stop()
 
-    orders = [o for o in all_orders if o.order.order_id in selected_order_ids]
-
     with st.spinner("正在解析指令、提取占位符、生成测试场景..."):
         simulation_plan = build_simulation_plan(instructions, num_sets=num_placeholder_sets)
     parsed_rules = simulation_plan.parsed_rules
     agent_spec = simulation_plan.agent_spec
     sub_plans = simulation_plan.sub_plans
     placeholders = simulation_plan.placeholders
+    rules_by_id = {rule.rule_id: rule for rule in parsed_rules}
 
     selected_profile_types = {persona.persona_type for persona in selected_personas}
 
@@ -1069,7 +1069,7 @@ if run_clicked:
     st.session_state.transcripts = []
     st.session_state.run_complete = False
 
-    total = len(plan_case_pairs) * len(orders)
+    total = len(plan_case_pairs)
 
     _section_head("03", "实时<em>执行</em>", f"{total} 个会话 · 顺序运行")
 
@@ -1077,85 +1077,116 @@ if run_clicked:
     live = st.container()
 
     done = 0
-    for order in orders:
-        for sub_plan, case in plan_case_pairs:
-            persona_label = _persona_label(case.profile_type)
-            session_label = (
-                f"{sub_plan.set_id} · {case.target_rule_id} · {persona_label}"
-            )
-            label = f"{order.order.order_id} × {session_label}"
-            print(f"\n[{done + 1}/{total}] 开始 {label}", flush=True)
-            progress.progress(
-                done / total,
-                text=f"对话生成中 · {label}  ({done + 1}/{total})",
-            )
+    for sub_plan, case in plan_case_pairs:
+        persona_label = _persona_label(case.profile_type)
+        session_label = (
+            f"{sub_plan.set_id} · {case.target_rule_id} · {case.case_type_label} · {persona_label}"
+        )
+        session_id = f"{sub_plan.set_id}:{case.test_id}"
+        target_rule = rules_by_id[case.target_rule_id]
+        print(f"\n[{done + 1}/{total}] 开始 {session_label}", flush=True)
+        progress.progress(
+            done / total,
+            text=f"对话生成中 · {session_label}  ({done + 1}/{total})",
+        )
 
-            agent = make_outbound_agent(sub_plan.filled_instruction)
-            outbound = OutboundSession(order, agent=agent)
-            simulator = UserSimulator(order, case, agent_spec)
-            print(f"  agent.start()", flush=True)
-            agent_turn = outbound.start()
-            for turn_idx in range(MAX_TURNS):
-                if agent_turn.should_end:
-                    print(f"  agent 结束于第 {turn_idx + 1} 轮", flush=True)
-                    break
-                user_turn = simulator.reply(agent_turn.reply_text)
-                if user_turn.should_end:
-                    outbound.record_user(user_turn.reply_text)
-                    print(f"  user 结束于第 {turn_idx + 1} 轮", flush=True)
-                    break
-                agent_turn = outbound.reply(user_turn.reply_text)
-            else:
-                print(f"  达到 MAX_TURNS={MAX_TURNS}", flush=True)
+        agent = make_outbound_agent(sub_plan.filled_instruction)
+        session_meta = SessionMeta(
+            session_id=session_id,
+            source_label="streamlit",
+            instruction_snapshot=sub_plan.filled_instruction,
+            scenario_context=sub_plan.placeholder_values,
+        )
+        outbound = OutboundSession(session_meta, agent=agent)
+        simulator = UserSimulator(
+            case,
+            agent_spec,
+            sub_plan.placeholder_values,
+            session_id=session_id,
+        )
+        print("  agent.start()", flush=True)
+        agent_turn = outbound.start()
+        for turn_idx in range(MAX_TURNS):
+            if agent_turn.should_end:
+                print(f"  agent 结束于第 {turn_idx + 1} 轮", flush=True)
+                break
+            user_turn = simulator.reply(agent_turn.reply_text)
+            if user_turn.should_end:
+                outbound.record_user(user_turn.reply_text)
+                print(f"  user 结束于第 {turn_idx + 1} 轮", flush=True)
+                break
+            agent_turn = outbound.reply(user_turn.reply_text)
+        else:
+            print(f"  达到 MAX_TURNS={MAX_TURNS}", flush=True)
 
-            print(f"  开始评测 {len(parsed_rules)} 条规则 × {judge_samples} 采样", flush=True)
-            progress.progress(
-                done / total,
-                text=f"规则评测中 · {label}  ({done + 1}/{total})",
-            )
-            outbound.save_archive(
-                SESSIONS_DIR,
-                "agent_end",
-                persona_type=case.profile_type,
-                simulator_label=session_label,
-                test_case_id=case.test_id,
-                target_rule_id=case.target_rule_id,
-            )
-            archive = outbound.get_archive(
-                persona_type=case.profile_type,
-                simulator_label=session_label,
-                test_case_id=case.test_id,
-                target_rule_id=case.target_rule_id,
-            )
-            report = evaluate_session(
-                archive,
-                case.profile_type,
-                rules=parsed_rules,
-                n_samples=judge_samples,
-                max_workers=8,
-                set_id=sub_plan.set_id,
-                set_label=sub_plan.label,
-            )
-            append_evaluation_memory(archive, report, MEMORY_DIR)
-            print(f"  评测完成，得分 {report.score:.0%}", flush=True)
-            item = {
-                "order_id": order.order.order_id,
-                "persona_type": case.profile_type,
-                "simulator_label": session_label,
-                "test_case_id": case.test_id,
-                "target_rule_id": case.target_rule_id,
-                "set_id": sub_plan.set_id,
-                "set_label": sub_plan.label,
-                "transcript": archive.transcript,
-            }
+        print(
+            f"  开始评测目标规则 {case.target_rule_id} × {judge_samples} 采样",
+            flush=True,
+        )
+        progress.progress(
+            done / total,
+            text=f"规则评测中 · {session_label}  ({done + 1}/{total})",
+        )
+        outbound.save_archive(
+            SESSIONS_DIR,
+            "agent_end",
+            persona_type=case.profile_type,
+            case_type=case.case_type,
+            simulator_label=session_label,
+            test_case_id=case.test_id,
+            target_rule_id=case.target_rule_id,
+            target_rule_type=case.test_goal.target_rule_type,
+            target_rule_description=case.test_goal.rule_description,
+            target_rule_evaluation_hint=case.test_goal.evaluation_hint,
+            target_rule_severity=case.test_goal.severity,
+            set_id=sub_plan.set_id,
+            set_label=sub_plan.label,
+        )
+        archive = outbound.get_archive(
+            persona_type=case.profile_type,
+            case_type=case.case_type,
+            simulator_label=session_label,
+            test_case_id=case.test_id,
+            target_rule_id=case.target_rule_id,
+            target_rule_type=case.test_goal.target_rule_type,
+            target_rule_description=case.test_goal.rule_description,
+            target_rule_evaluation_hint=case.test_goal.evaluation_hint,
+            target_rule_severity=case.test_goal.severity,
+            set_id=sub_plan.set_id,
+            set_label=sub_plan.label,
+        )
+        report = evaluate_session(
+            archive,
+            case.profile_type,
+            rules=[target_rule],
+            n_samples=judge_samples,
+            max_workers=8,
+            set_id=sub_plan.set_id,
+            set_label=sub_plan.label,
+        )
+        append_evaluation_memory(archive, report, MEMORY_DIR)
+        print(f"  评测完成，得分 {report.score:.0%}", flush=True)
+        item = {
+            "session_id": session_id,
+            "persona_type": case.profile_type,
+            "case_type": case.case_type,
+            "case_type_label": case.case_type_label,
+            "simulator_label": session_label,
+            "test_case_id": case.test_id,
+            "target_rule_id": case.target_rule_id,
+            "set_id": sub_plan.set_id,
+            "set_label": sub_plan.label,
+            "scenario_context": sub_plan.placeholder_values,
+            "transcript": archive.transcript,
+        }
 
-            st.session_state.reports.append(report)
-            st.session_state.transcripts.append(item)
-            with live:
-                _render_session_card(item, report)
+        st.session_state.reports.append(report)
+        st.session_state.transcripts.append(item)
+        with live:
+            _render_session_card(item, report)
 
-            done += 1
-            progress.progress(done / total, text=f"已完成 · {label}  ({done}/{total})")
+        done += 1
+        progress.progress(done / total, text=f"已完成 · {session_label}  ({done}/{total})")
 
     progress.progress(1.0, text="评测完成 · 100%")
     st.session_state.run_complete = True
@@ -1179,7 +1210,7 @@ if st.session_state.run_complete and st.session_state.reports:
         f'{_bento_cell("综合得分", f"{avg_score:.0%}", f"共 {total} 个会话平均", feature=True)}'
         f'{_bento_cell("条件覆盖率", f"{coverage.coverage_rate:.0%}", f"{coverage.triggered_conditional}/{coverage.total_conditional} 条规则被触发")}'
         f'{_bento_cell("评估置信度", f"{avg_conf:.0%}", "LLM 自一致率")}'
-        f'{_bento_cell("会话总数", f"{total}", "订单 × 目标用例")}'
+        f'{_bento_cell("会话总数", f"{total}", "场景组 × 目标用例")}'
         f'</div>',
         unsafe_allow_html=True,
     )

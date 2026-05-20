@@ -28,7 +28,7 @@ class RuleResult:
 
 @dataclass
 class EvaluationReport:
-    order_id: str
+    session_id: str
     persona_type: str
     rule_results: list[RuleResult]
     score: float
@@ -44,7 +44,7 @@ class EvaluationReport:
     def summary(self) -> str:
         set_tag = f"  Set：{self.set_id}" if self.set_id else ""
         lines = [
-            f"订单：{self.order_id}  Persona：{self.persona_type}{set_tag}  "
+            f"会话：{self.session_id}  Persona：{self.persona_type}{set_tag}  "
             f"得分：{self.score:.0%}  平均置信度：{self.mean_confidence:.0%}",
             "",
         ]
@@ -107,7 +107,7 @@ class JudgeOutput(BaseModel):
 _judge_agent = Agent(
     name="RuleJudge",
     instructions=(
-        "你是一名对话质量评估专家，负责判断美团外呼数字人是否遵守了给定规则。"
+        "你是一名对话质量评估专家，负责判断被测对话 Agent 是否遵守了给定规则。"
         "只根据提供的对话记录进行判断，不要推测对话之外的信息。"
         "evidence 必须引用具体轮次，例如'第3轮数字人说...'。"
     ),
@@ -196,7 +196,7 @@ def evaluate_session(
     score = passed_weight / total_weight if total_weight > 0 else 0.0
 
     return EvaluationReport(
-        order_id=archive.order_id,
+        session_id=archive.session_id,
         persona_type=persona_type,
         rule_results=rule_results,
         score=score,

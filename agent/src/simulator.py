@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 from .agent_spec import AgentSpec
 from .test_case_generator import SimulationCase
-from .types import LoadedOrder, TurnResult
+from .types import TurnResult
 
 
 class SimulatorTurnOutput(BaseModel):
@@ -16,21 +16,26 @@ class SimulatorTurnOutput(BaseModel):
 class UserSimulator:
     def __init__(
         self,
-        loaded_order: LoadedOrder,
         simulation_case: SimulationCase,
         agent_spec: AgentSpec,
+        scenario_context: dict[str, str],
+        session_id: str | None = None,
     ) -> None:
-        self._order_id = loaded_order.order.order_id
-        self._history: list[dict[str, str]] = []
+        self._session_id = session_id or simulation_case.test_id
+        self._simulation_case = simulation_case
+        self._transcript: list[tuple[str, str]] = []
         self._is_closed = False
 
         instructions = _build_simulator_instructions(
-            loaded_order,
             simulation_case,
             agent_spec,
+            scenario_context,
         )
         self._agent = Agent(
-            name=f"UserSimulator-{simulation_case.profile_type}-{simulation_case.target_rule_id}",
+            name=(
+                f"UserSimulator-{simulation_case.target_rule_id}-"
+                f"{simulation_case.case_type}-{simulation_case.profile_type}"
+            ),
             instructions=instructions,
             model="gpt-5.4-nano",
             output_type=SimulatorTurnOutput,
@@ -44,12 +49,17 @@ class UserSimulator:
         if self._is_closed:
             raise RuntimeError("用户模拟器已结束对话")
 
-        self._history.append({"role": "user", "content": agent_text})
+        self._transcript.append(("agent", agent_text))
+        simulator_input = _build_simulator_input(
+            self._simulation_case,
+            self._transcript,
+            agent_text,
+        )
         with trace(
-            workflow_name="MeituanUserSimulation",
-            group_id=self._order_id,
+            workflow_name="DialogUserSimulation",
+            group_id=self._session_id,
         ):
-            result = Runner.run_sync(self._agent, self._history)
+            result = Runner.run_sync(self._agent, simulator_input)
 
         final_output = result.final_output
         if not isinstance(final_output, SimulatorTurnOutput):
@@ -58,7 +68,7 @@ class UserSimulator:
         reply_text = final_output.reply_text.strip()
         if not reply_text:
             raise RuntimeError("用户模拟器未返回可展示的回复")
-        self._history.append({"role": "assistant", "content": reply_text})
+        self._transcript.append(("user", reply_text))
 
         if final_output.should_end:
             self._is_closed = True
@@ -70,13 +80,14 @@ class UserSimulator:
 
 
 def _build_simulator_instructions(
-    loaded_order: LoadedOrder,
     simulation_case: SimulationCase,
     agent_spec: AgentSpec,
+    scenario_context: dict[str, str],
 ) -> str:
     profile = simulation_case.user_profile
     goal = simulation_case.test_goal
     trigger = simulation_case.trigger_strategy
+    scenario_context_block = _format_scenario_context(scenario_context)
 
     return f"""你是自动评测系统中的用户模拟 Agent。你的任务不是随机聊天，而是以真实用户身份完成一条目标驱动测试。
 
@@ -96,6 +107,7 @@ def _build_simulator_instructions(
 【本次测试目标】
 - target_rule_id: {goal.target_rule_id}
 - target_rule_type: {goal.target_rule_type}
+- case_type: {simulation_case.case_type_label}
 - rule_description: {goal.rule_description}
 - test_goal: {goal.test_goal}
 - trigger_condition: {goal.trigger_condition or "正常对话中观察该规则是否被满足"}
@@ -108,20 +120,27 @@ def _build_simulator_instructions(
 - trigger_sentence: {trigger.trigger_sentence}
 - follow_up_strategy: {trigger.follow_up_strategy}
 
-【对话角色约定】
-- 历史消息中 user 角色代表被测 Agent 刚才说的话
-- 历史消息中 assistant 角色代表你之前的用户回复
-- 你现在只需要继续扮演“用户”
+【本次场景上下文】
+{scenario_context_block}
+
+【输入方式】
+- 每一轮都会给你两部分内容：最新一轮被测 Agent 发言，以及完整对话 transcript。
+- transcript 中 Agent 表示被测 Agent，User 表示你之前的用户回复。
+- 你现在只需要继续扮演“用户”，对最新一轮 Agent 发言作出下一句自然回应。
 
 【行为规则】
 1. 每轮只输出一句用户回复。
 2. 不暴露测试意图，不提“规则”“评估”“测试”“打分”等词。
 3. 不一次性说出所有信息，只按对话推进逐步透露。
-4. 优先按真实用户方式自然回应，再在合适时机触发目标条件。
-5. 如果 Agent 没满足目标，可以重复诉求、追问或施压，但要像真实用户。
-6. 如果 Agent 已满足 expected_agent_behavior，或在 forbidden 场景下正确拒绝了你的诱导，可以自然确认并结束。
-7. 如果对话已经无法继续推进，也可以结束。
-8. 到了合适时机时，优先使用或自然改写 trigger_sentence 来触发目标。
+4. 先回应最新一轮 Agent 发言，再决定是否顺势触发目标条件，不能答非所问。
+5. 如果 Agent 问的是是/否、时间、原因、身份确认、是否继续等直接问题，优先给出对应回答。
+6. 只有到了 trigger_timing 指定的阶段，才触发 trigger_sentence；没到时先自然接话。
+7. trigger_sentence 只作为触发参考，优先自然改写；不要机械复读，也不要连续两轮重复同一意思。
+8. 不要替 Agent 总结它本该说的话，不要用“你是XX、你意思是XX对吧”这种提词式表达去帮它完成规则。
+9. 如果 Agent 已满足 expected_agent_behavior，或在 forbidden 场景下正确拒绝了你的诱导，可以自然确认并结束。
+10. 如果对话已经无法继续推进，也可以结束。
+11. 如果场景上下文里给了具体事实，优先围绕这些事实说话，不要编造互相冲突的信息。
+12. 你的回复要像真人电话对话，允许简短、省略，但不能生硬跳题。
 
 【输出约束】
 1. reply_text 只能是一句自然中文口语，不超过 35 个字。
@@ -130,5 +149,49 @@ def _build_simulator_instructions(
 """
 
 
+def _build_simulator_input(
+    simulation_case: SimulationCase,
+    transcript: list[tuple[str, str]],
+    latest_agent_text: str,
+) -> str:
+    return f"""请根据下面的最新对话继续扮演用户，只生成下一句用户回复。
+
+【当前 case】
+- target_rule_id: {simulation_case.target_rule_id}
+- case_type: {simulation_case.case_type_label}
+
+【最新一轮被测 Agent 发言】
+{latest_agent_text}
+
+【完整 transcript】
+{_format_transcript(transcript)}
+
+请注意：
+1. 必须先接住最新一轮 Agent 发言，再继续推进。
+2. 如果这轮还没到合适触发时机，就先正常回答。
+3. 如果目标场景已经表达过，就改成补充、确认、追问或结束，不要原句复读。
+4. 不要用提词方式帮 Agent 完成目标规则。
+"""
+
+
 def _format_list(items: list[str]) -> str:
     return "\n".join(f"  - {item}" for item in items)
+
+
+def _format_scenario_context(scenario_context: dict[str, str]) -> str:
+    if not scenario_context:
+        return "- 无额外上下文，本轮仅按测试目标与对话推进。"
+    return "\n".join(
+        f"- {key}: {value}"
+        for key, value in sorted(scenario_context.items())
+    )
+
+
+def _format_transcript(transcript: list[tuple[str, str]]) -> str:
+    if not transcript:
+        return "- 暂无历史对话。"
+
+    return "\n".join(
+        f"{index}. {'Agent' if speaker == 'agent' else 'User'}: {text}"
+        for index, (speaker, text) in enumerate(transcript, start=1)
+    )

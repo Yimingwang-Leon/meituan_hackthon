@@ -24,7 +24,7 @@ class FakeRuleResult:
 
 @dataclass
 class FakeEvaluationReport:
-    order_id: str
+    session_id: str
     persona_type: str
     rule_results: list[FakeRuleResult]
     score: float
@@ -39,9 +39,7 @@ class FakeEvaluationReport:
 class EvaluationMemoryTest(unittest.TestCase):
     def test_append_evaluation_memory_persists_transcript_and_judger_results(self) -> None:
         archive = SessionArchive(
-            order_id="confirm_001",
-            user_name="王先生",
-            source_file="confirm_001.json",
+            session_id="set_default:R01_cooperative",
             started_at="2026-05-15T00:00:00+00:00",
             ended_at="2026-05-15T00:01:00+00:00",
             ended_by="agent_end",
@@ -57,10 +55,21 @@ class EvaluationMemoryTest(unittest.TestCase):
                     timestamp="2026-05-15T00:00:20+00:00",
                 ),
             ],
+            source_label="unit-test",
+            instruction_snapshot="你是一名客服助手。",
+            scenario_context={"customer_name": "王先生"},
             persona_type="cooperative",
+            case_type="normal_trigger",
+            target_rule_id="R01",
+            target_rule_type="required",
+            target_rule_description="开场必须说明自己的身份",
+            target_rule_evaluation_hint="检查第一轮数字人发言是否包含明确身份说明",
+            target_rule_severity="major",
+            set_id="set_default",
+            set_label="默认",
         )
         report = FakeEvaluationReport(
-            order_id="confirm_001",
+            session_id="set_default:R01_cooperative",
             persona_type="cooperative",
             score=0.5,
             rule_results=[
@@ -94,10 +103,15 @@ class EvaluationMemoryTest(unittest.TestCase):
             self.assertEqual(len(data), 1)
 
             entry = json.loads(data[0])
-            self.assertEqual(entry["order_id"], "confirm_001")
+            self.assertEqual(entry["session_key"], "set_default:R01_cooperative")
+            self.assertEqual(entry["archive_session_id"], "set_default:R01_cooperative")
             self.assertEqual(entry["persona_type"], "cooperative")
+            self.assertEqual(entry["case_type"], "normal_trigger")
             self.assertTrue(entry["has_violation"])
             self.assertEqual(entry["violation_count"], 1)
+            self.assertEqual(entry["scenario_context"]["customer_name"], "王先生")
+            self.assertEqual(entry["target_rule_id"], "R01")
+            self.assertEqual(entry["target_rule_severity"], "major")
             self.assertEqual(entry["transcript"][0]["speaker"], "agent")
             self.assertEqual(entry["transcript"][1]["text"], "可以。")
             self.assertEqual(entry["judge_results"][0]["judger_result"], "pass")

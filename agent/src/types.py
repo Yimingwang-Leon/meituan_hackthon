@@ -1,27 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Literal
 
 
 @dataclass(frozen=True)
-class OrderRecord:
-    user_name: str
-    order_id: str
-    eta: str
-    address: str
-    store_name: str | None = None
-    recorded_address: str | None = None
-    delivery_note: str | None = None
-    task_context: str | None = None
-    scenario: str | None = None
-
-
-@dataclass(frozen=True)
-class LoadedOrder:
-    file_path: str
-    file_name: str
-    order: OrderRecord
+class SessionMeta:
+    session_id: str
+    source_label: str | None = None
+    instruction_snapshot: str | None = None
+    scenario_context: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -33,17 +21,25 @@ class TranscriptEntry:
 
 @dataclass(frozen=True)
 class SessionArchive:
-    order_id: str
-    user_name: str
-    source_file: str
+    session_id: str
     started_at: str
     ended_at: str
     ended_by: Literal["next", "quit", "agent_end"]
     transcript: list[TranscriptEntry]
+    source_label: str | None = None
+    instruction_snapshot: str | None = None
+    scenario_context: dict[str, str] = field(default_factory=dict)
     persona_type: str | None = None
+    case_type: str | None = None
     simulator_label: str | None = None
     test_case_id: str | None = None
     target_rule_id: str | None = None
+    target_rule_type: str | None = None
+    target_rule_description: str | None = None
+    target_rule_evaluation_hint: str | None = None
+    target_rule_severity: str | None = None
+    set_id: str | None = None
+    set_label: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
