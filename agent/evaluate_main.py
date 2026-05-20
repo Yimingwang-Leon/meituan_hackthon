@@ -115,6 +115,15 @@ def _save_report(reports: list[EvaluationReport], output_dir: Path) -> str:
                         "description": rr.description,
                         "result": rr.result,
                         "evidence": rr.evidence,
+                        "rationale": rr.rationale,
+                        "matched_failure_criteria": rr.matched_failure_criteria,
+                        "suggestion": rr.suggestion,
+                        "confidence": rr.confidence,
+                        "votes": rr.votes,
+                        "evaluated_by": rr.evaluated_by,
+                        "judge_model": rr.judge_model,
+                        "judge_prompt": rr.judge_prompt,
+                        "all_samples": rr.all_samples,
                     }
                     for rr in r.rule_results
                 ],

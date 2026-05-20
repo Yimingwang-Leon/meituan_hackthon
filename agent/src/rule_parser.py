@@ -179,7 +179,7 @@ def _get_parser_agent():
         _parser_agent = Agent(
             name="RuleParser",
             instructions=_PARSER_INSTRUCTIONS,
-            model="deepseek-v4-flash",
+            model="deepseek-v4-pro",
             output_type=ParsedRuleList,
         )
 

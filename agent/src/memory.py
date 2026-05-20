@@ -43,9 +43,19 @@ def _serialize_rule_result(rule_result: RuleResult) -> dict[str, object]:
         "trigger_turn": getattr(rule_result, "trigger_turn", None),
         "response_turn": getattr(rule_result, "response_turn", None),
         "evaluated_by": getattr(rule_result, "evaluated_by", "llm_judge"),
+        "judge_model": getattr(rule_result, "judge_model", ""),
+        "judge_prompt": getattr(rule_result, "judge_prompt", ""),
         "evidence": rule_result.evidence,
+        "rationale": getattr(rule_result, "rationale", ""),
+        "matched_failure_criteria": getattr(
+            rule_result,
+            "matched_failure_criteria",
+            [],
+        ),
+        "suggestion": getattr(rule_result, "suggestion", ""),
         "confidence": rule_result.confidence,
         "votes": rule_result.votes,
+        "all_samples": getattr(rule_result, "all_samples", []),
     }
 
 

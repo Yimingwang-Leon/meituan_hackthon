@@ -24,8 +24,14 @@ class RuleResult:
     severity: str
     result: RuleResultLiteral
     evidence: str
+    rationale: str = ""
+    matched_failure_criteria: list[str] = field(default_factory=list)
+    suggestion: str = ""
     confidence: float = 1.0
     votes: dict[str, int] = field(default_factory=dict)
+    all_samples: list[dict[str, object]] = field(default_factory=list)
+    judge_model: str = ""
+    judge_prompt: str = ""
     triggered: bool | None = None       # conditional 规则才填
     trigger_turn: int | None = None     # 触发发生在第几轮（1-based）
     response_turn: int | None = None    # Agent 响应在第几轮
@@ -68,6 +74,8 @@ class EvaluationReport:
             )
             if r.result not in ("not_applicable",):
                 lines.append(f"      → {r.evidence}")
+            if r.result == "fail" and r.suggestion:
+                lines.append(f"      建议：{r.suggestion}")
         return "\n".join(lines)
 
 
@@ -156,6 +164,27 @@ class JudgeOutput(BaseModel):
     evidence: str = Field(
         description="引用具体对话轮次说明判断依据，不超过 60 字。"
     )
+    rationale: str = Field(
+        default="",
+        description=(
+            "可审计判定依据，不是隐藏思考。结构化说明："
+            "1. 相关对话事实和轮次；2. 对照的规则或失败标准；3. 结论。"
+        ),
+    )
+    matched_failure_criteria: list[str] = Field(
+        default_factory=list,
+        description=(
+            "若 triggered=true 且 compliant=false，列出命中的 failure_criteria 原文；"
+            "其他情况填空列表 []。"
+        ),
+    )
+    suggestion: str = Field(
+        default="",
+        description=(
+            "仅在 triggered=true 且 compliant=false 时填写一句改进建议，不超过 50 字；"
+            "pass、not_applicable 或 trigger_failed 时填空字符串。"
+        ),
+    )
 
 
 _judge_agent = Agent(
@@ -174,9 +203,12 @@ _judge_agent = Agent(
         "   - forbidden：是否整段对话都没有违反禁止行为\n"
         "   - 给出 response_turn；如无明确响应轮次填 0\n"
         "只根据提供的对话记录判断，不要推测对话之外的信息。\n"
-        "evidence 必须引用具体轮次，例如「第3轮数字人说...」。"
+        "evidence 必须引用具体轮次，例如「第3轮数字人说...」。\n"
+        "rationale 是给人复核的判定依据，不要写隐藏推理过程；必须引用对话事实、规则标准和结论。\n"
+        "matched_failure_criteria 只在不合规时填写命中的失败标准原文。\n"
+        "suggestion 只在不合规时填写，给出一句可执行改进建议。"
     ),
-    model="deepseek-v4-flash",
+    model="deepseek-v4-pro",
     output_type=JudgeOutput,
 )
 
@@ -243,11 +275,17 @@ def _aggregate_votes(
     outputs: list[JudgeOutput],
     is_primary: bool,
     evaluated_by: Literal["llm_judge", "deterministic"] = "llm_judge",
+    judge_model: str = "",
+    judge_prompt: str = "",
 ) -> RuleResult:
     classifications = [_classify_judge(rule, o, is_primary) for o in outputs]
     vote_counter: Counter[str] = Counter(classifications)
     winner, top_votes = vote_counter.most_common(1)[0]
     confidence = top_votes / len(outputs)
+    all_samples = [
+        _build_sample(rule, output, is_primary, index + 1)
+        for index, output in enumerate(outputs)
+    ]
 
     # 选第一个 winner 类别的 output 作为代表
     winner_idx = next(i for i, c in enumerate(classifications) if c == winner)
@@ -273,14 +311,45 @@ def _aggregate_votes(
         severity=rule.severity,
         result=winner,
         evidence=rep_output.evidence,
+        rationale=rep_output.rationale,
+        matched_failure_criteria=(
+            list(rep_output.matched_failure_criteria) if winner == "fail" else []
+        ),
+        suggestion=rep_output.suggestion.strip() if winner == "fail" else "",
         confidence=confidence,
         votes=dict(vote_counter),
+        all_samples=all_samples,
+        judge_model=judge_model or evaluated_by,
+        judge_prompt=judge_prompt,
         triggered=triggered,
         trigger_turn=trigger_turn,
         response_turn=response_turn,
         is_primary=is_primary,
         evaluated_by=evaluated_by,
     )
+
+
+def _build_sample(
+    rule: Rule,
+    output: JudgeOutput,
+    is_primary: bool,
+    sample_index: int,
+) -> dict[str, object]:
+    result = _classify_judge(rule, output, is_primary)
+    return {
+        "sample_index": sample_index,
+        "result": result,
+        "triggered": output.triggered,
+        "trigger_turn": output.trigger_turn,
+        "response_turn": output.response_turn,
+        "compliant": output.compliant,
+        "evidence": output.evidence,
+        "rationale": output.rationale,
+        "matched_failure_criteria": (
+            list(output.matched_failure_criteria) if result == "fail" else []
+        ),
+        "suggestion": output.suggestion.strip() if result == "fail" else "",
+    }
 
 
 def _outcome_to_judge_output(outcome: CheckOutcome) -> JudgeOutput:
@@ -291,7 +360,17 @@ def _outcome_to_judge_output(outcome: CheckOutcome) -> JudgeOutput:
         response_turn=outcome.response_turn,
         compliant=outcome.compliant,
         evidence=outcome.evidence,
+        rationale=outcome.evidence,
+        matched_failure_criteria=[] if outcome.compliant else [outcome.evidence],
+        suggestion="",
     )
+
+
+def _build_deterministic_audit_prompt(rule: Rule) -> str:
+    check_lines = "; ".join(
+        f"{check.check_type.value}: {check.description}" for check in rule.checks
+    )
+    return f"deterministic checks for {rule.rule_id}: {check_lines}"
 
 
 def evaluate_session(
@@ -330,16 +409,31 @@ def evaluate_session(
             outcome = run_checks_combined(rule.checks, archive)
             outputs = [_outcome_to_judge_output(outcome)]
             rule_results.append(
-                _aggregate_votes(rule, outputs, is_primary, evaluated_by="deterministic")
+                _aggregate_votes(
+                    rule,
+                    outputs,
+                    is_primary,
+                    evaluated_by="deterministic",
+                    judge_model="deterministic",
+                    judge_prompt=_build_deterministic_audit_prompt(rule),
+                )
             )
         else:
             # LLM judge × N 采样
+            prompt = prompts[rule.rule_id]
             outputs = [
-                _run_judge_once(prompts[rule.rule_id], rule.rule_id)
+                _run_judge_once(prompt, rule.rule_id)
                 for _ in range(n_samples)
             ]
             rule_results.append(
-                _aggregate_votes(rule, outputs, is_primary, evaluated_by="llm_judge")
+                _aggregate_votes(
+                    rule,
+                    outputs,
+                    is_primary,
+                    evaluated_by="llm_judge",
+                    judge_model=_judge_agent.model,
+                    judge_prompt=prompt,
+                )
             )
             llm_done += n_samples
             print(f"    LLM judge 进度 {llm_done}/{total_llm_calls}", flush=True)

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import os
 import sys
+import time
+from collections import Counter
+from datetime import datetime
+from html import escape
 from pathlib import Path
 
 import altair as alt
@@ -60,8 +64,59 @@ CUSTOM_CSS = """
 <style>
 /* ── 隐藏 Streamlit 默认 chrome ─────────────────────────────────── */
 #MainMenu, footer { display: none !important; }
-header[data-testid="stHeader"] { background: transparent; height: 0; }
-[data-testid="stToolbar"] { display: none; }
+header[data-testid="stHeader"] {
+    background: transparent !important;
+    height: 3rem !important;
+}
+[data-testid="stToolbar"] {
+    display: flex !important;
+    background: transparent !important;
+}
+[data-testid="stToolbar"] [data-testid="stToolbarActions"],
+[data-testid="stToolbar"] [data-testid="stDecoration"] {
+    display: none !important;
+}
+[data-testid="stSidebar"][aria-expanded="false"] {
+    min-width: 336px !important;
+    max-width: 336px !important;
+    transform: none !important;
+    pointer-events: auto !important;
+}
+[data-testid="stSidebarCollapsedControl"] {
+    display: flex !important;
+    position: fixed !important;
+    top: 0.75rem !important;
+    left: 0.75rem !important;
+    z-index: 999999 !important;
+    width: 44px !important;
+    height: 44px !important;
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 14px rgba(15,23,42,0.08) !important;
+    align-items: center !important;
+    justify-content: center !important;
+    pointer-events: auto !important;
+}
+[data-testid="stSidebarCollapsedControl"] img,
+[data-testid="stSidebarCollapsedControl"] [data-testid="stLogoSpacer"] {
+    display: none !important;
+}
+[data-testid="stSidebarCollapsedControl"] button {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 40px !important;
+    height: 40px !important;
+    color: var(--text) !important;
+    background: transparent !important;
+    border: none !important;
+}
+[data-testid="stSidebarCollapsedControl"] svg {
+    display: block !important;
+    color: var(--text) !important;
+    fill: currentColor !important;
+}
 
 /* ── Design tokens ─────────────────────────────────────────────── */
 :root {
@@ -514,6 +569,31 @@ hr {
     font-weight: 500;
 }
 
+.summary-box {
+    margin: 0.75rem 0 1.25rem;
+    padding: 1.1rem 1.25rem;
+    background: linear-gradient(90deg, var(--brand-soft) 0%, var(--surface) 72%);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--brand);
+    border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(28, 25, 23, 0.04);
+}
+.summary-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 0.45rem;
+}
+.summary-line {
+    font-size: 0.925rem;
+    line-height: 1.75;
+    color: var(--text-2);
+}
+.summary-line strong {
+    color: var(--text);
+    font-weight: 700;
+}
+
 /* — 胶囊徽章 — */
 .pill {
     display: inline-flex;
@@ -568,6 +648,15 @@ hr {
     line-height: 1.5;
     font-weight: 500;
 }
+.rule-verdict {
+    font-size: 0.86rem;
+    color: var(--text-2);
+    margin-top: 0.4rem;
+    line-height: 1.5;
+}
+.rule-verdict strong {
+    color: var(--text);
+}
 .rule-meta-row {
     display: flex;
     gap: 0.375rem;
@@ -593,6 +682,56 @@ hr {
     background: var(--brand-soft);
     border-radius: 0 6px 6px 0;
     line-height: 1.55;
+}
+.rule-rationale {
+    font-size: 0.82rem;
+    color: var(--text-2);
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--surface-hi);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    line-height: 1.55;
+}
+.rule-suggestion {
+    font-size: 0.82rem;
+    color: var(--success);
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--success-soft);
+    border-left: 3px solid var(--success);
+    border-radius: 0 6px 6px 0;
+    line-height: 1.55;
+}
+.sample-details {
+    margin-top: 0.5rem;
+    font-size: 0.82rem;
+    color: var(--text-2);
+}
+.sample-details summary {
+    cursor: pointer;
+    color: var(--text-3);
+    font-weight: 600;
+    user-select: none;
+}
+.sample-item {
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    line-height: 1.5;
+}
+.sample-meta {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--text-3);
+    margin-bottom: 0.25rem;
+}
+.sample-meta strong {
+    color: var(--text-2);
+    font-family: var(--sans);
+    font-size: 0.78rem;
 }
 
 /* — 侧边栏小卡片 — */
@@ -691,6 +830,7 @@ for key, default in [
     ("reports", []),
     ("transcripts", []),
     ("parsed_rules", []),
+    ("run_timing", {}),
     ("run_complete", False),
 ]:
     if key not in st.session_state:
@@ -702,24 +842,207 @@ for key, default in [
 # ═══════════════════════════════════════════════════════════════════════════
 def _score_pill(score: float) -> str:
     if score >= 0.8: return f'<span class="pill pill-success">通过 · {score:.0%}</span>'
-    if score >= 0.5: return f'<span class="pill pill-warning">待改进 · {score:.0%}</span>'
-    return f'<span class="pill pill-danger">薄弱 · {score:.0%}</span>'
+    if score >= 0.5: return f'<span class="pill pill-warning">部分通过 · {score:.0%}</span>'
+    return f'<span class="pill pill-danger">失败 · {score:.0%}</span>'
 
 
 def _conf_pill(c: float) -> str:
-    if c >= 0.99: return f'<span class="pill pill-success">置信度 {c:.0%}</span>'
-    if c >= 0.66: return f'<span class="pill pill-warning">置信度 {c:.0%}</span>'
-    return f'<span class="pill pill-danger">置信度 {c:.0%}</span>'
+    if c >= 0.99: return f'<span class="pill pill-success">Judge一致率 {c:.0%}</span>'
+    if c >= 0.66: return f'<span class="pill pill-warning">Judge一致率 {c:.0%}</span>'
+    return f'<span class="pill pill-danger">Judge一致率 {c:.0%}</span>'
 
 
 def _sev_pill(sev: str) -> str:
-    label = {"critical": "致命", "major": "严重", "minor": "轻微"}.get(sev, sev)
+    label = _severity_label(sev)
     cls = {"critical": "pill-danger", "major": "pill-warning", "minor": "pill-neutral"}.get(sev, "pill-neutral")
     return f'<span class="pill {cls}">{label}</span>'
 
 
+def _severity_label(sev: str) -> str:
+    return {"critical": "关键", "major": "重要", "minor": "一般"}.get(sev, sev)
+
+
 def _persona_label(persona_type: str) -> str:
     return PERSONA_LABELS.get(persona_type, persona_type)
+
+
+def _now_text() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _format_duration(seconds: object) -> str:
+    try:
+        total_seconds = max(0.0, float(seconds))
+    except (TypeError, ValueError):
+        return "-"
+    if total_seconds < 60:
+        return f"{total_seconds:.1f}s"
+    rounded = int(round(total_seconds))
+    minutes, sec = divmod(rounded, 60)
+    if minutes < 60:
+        return f"{minutes}m {sec:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m {sec:02d}s"
+
+
+def _timing_seconds(timing: dict[str, object], key: str) -> float:
+    return float(timing.get(key, 0) or 0)
+
+
+def _timing_session_sum(timing: dict[str, object], key: str) -> float:
+    sessions = timing.get("sessions", [])
+    if not isinstance(sessions, list):
+        return 0.0
+    return sum(float(session.get(key, 0) or 0) for session in sessions)
+
+
+def _timing_summary_text(timing: dict[str, object]) -> str:
+    sessions = timing.get("sessions", [])
+    if not isinstance(sessions, list):
+        sessions = []
+    lines = [
+        "评测耗时记录",
+        f"开始时间: {timing.get('started_at', '-')}",
+        f"结束时间: {timing.get('finished_at', '-')}",
+        f"总耗时: {_format_duration(timing.get('total_seconds', 0))}",
+        f"规划耗时: {_format_duration(timing.get('plan_seconds', 0))}",
+        f"对话生成耗时: {_format_duration(_timing_session_sum(timing, 'dialogue_seconds'))}",
+        f"规则评测耗时: {_format_duration(_timing_session_sum(timing, 'eval_seconds'))}",
+        f"会话数: {len(sessions)}",
+        "",
+        "逐会话:",
+    ]
+    for index, session in enumerate(sessions, start=1):
+        lines.append(
+            f"{index}. {session.get('session_label', '-')}"
+            f" | total={_format_duration(session.get('total_seconds', 0))}"
+            f" | dialogue={_format_duration(session.get('dialogue_seconds', 0))}"
+            f" | eval={_format_duration(session.get('eval_seconds', 0))}"
+        )
+    return "\n".join(lines)
+
+
+def _render_timing_panel(timing: dict[str, object]) -> None:
+    if not timing:
+        return
+    sessions = timing.get("sessions", [])
+    session_count = len(sessions) if isinstance(sessions, list) else 0
+    total_seconds = _timing_seconds(timing, "total_seconds")
+    plan_seconds = _timing_seconds(timing, "plan_seconds")
+    dialogue_seconds = _timing_session_sum(timing, "dialogue_seconds")
+    eval_seconds = _timing_session_sum(timing, "eval_seconds")
+    avg_session_seconds = (
+        _timing_session_sum(timing, "total_seconds") / session_count
+        if session_count else 0.0
+    )
+
+    st.markdown(
+        f'<div class="bento">'
+        f'{_bento_cell("总耗时", _format_duration(total_seconds), f"{session_count} 个会话", feature=True)}'
+        f'{_bento_cell("规划耗时", _format_duration(plan_seconds), "解析规则 + 占位符 + 测试对话")}'
+        f'{_bento_cell("对话耗时", _format_duration(dialogue_seconds), "被测 Agent + 用户模拟器")}'
+        f'{_bento_cell("评测耗时", _format_duration(eval_seconds), f"平均每会话 {_format_duration(avg_session_seconds)}")}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    with st.expander("复制耗时明细", expanded=False):
+        st.text_area(
+            "耗时明细",
+            value=_timing_summary_text(timing),
+            height=260,
+            label_visibility="collapsed",
+        )
+
+
+def _rule_detail_html(label: str, value: str, css_class: str) -> str:
+    value = value.strip()
+    if not value:
+        return ""
+    return (
+        f'<div class="{css_class}">'
+        f'<strong>{escape(label)}</strong>：{escape(value)}'
+        f'</div>'
+    )
+
+
+def _result_label(result: object) -> str:
+    return {
+        "pass": "通过",
+        "fail": "失败",
+        "not_applicable": "未触发",
+        "trigger_failed": "目标未触发",
+    }.get(str(result), str(result))
+
+
+def _result_explanation(result: object) -> str:
+    return {
+        "pass": "规则已触发，Agent 做到了要求。",
+        "fail": "规则已触发，但 Agent 没有做到要求。",
+        "not_applicable": "这段对话没有出现规则触发条件，不计入通过率。",
+        "trigger_failed": "这是目标测试，但模拟用户没有演出目标场景。",
+    }.get(str(result), "")
+
+
+def _votes_text(votes: dict[str, int]) -> str:
+    if not votes:
+        return ""
+    return " / ".join(
+        f"{_result_label(result)}×{count}"
+        for result, count in votes.items()
+    )
+
+
+def _session_result_label(report: EvaluationReport) -> str:
+    if len(report.rule_results) == 1:
+        return _result_label(report.rule_results[0].result)
+    if report.score >= 0.8:
+        return "通过"
+    if report.score >= 0.5:
+        return "部分通过"
+    return "失败"
+
+
+def _method_label(evaluated_by: object) -> str:
+    return "程序自动检查" if str(evaluated_by) == "deterministic" else "LLM Judge"
+
+
+def _samples_html(
+    samples: list[dict[str, object]],
+    evaluated_by: object = "llm_judge",
+) -> str:
+    if len(samples) <= 1:
+        return ""
+
+    items = []
+    for sample in samples:
+        index = escape(str(sample.get("sample_index", "?")))
+        result = escape(_result_label(sample.get("result", "")))
+        trigger_turn = escape(str(sample.get("trigger_turn") or 0))
+        response_turn = escape(str(sample.get("response_turn") or 0))
+        evidence = escape(str(sample.get("evidence", "")))
+        rationale = escape(str(sample.get("rationale", "")))
+        suggestion = escape(str(sample.get("suggestion", "")))
+        suggestion_html = (
+            f'<div><strong>改进建议</strong>：{suggestion}</div>'
+            if suggestion else ""
+        )
+        items.append(
+            f'<div class="sample-item">'
+            f'  <div class="sample-meta"><strong>第 {index} 次 Judge：{result}</strong> · '
+            f'触发第 {trigger_turn} 轮 · Agent响应第 {response_turn} 轮</div>'
+            f'  <div><strong>证据</strong>：{evidence}</div>'
+            f'  <div><strong>判定依据</strong>：{rationale}</div>'
+            f'  {suggestion_html}'
+            f'</div>'
+        )
+
+    return (
+        f'<details class="sample-details">'
+        f'  <summary>评测方式：{escape(_method_label(evaluated_by))} · '
+        f'展开 {len(samples)} 次明细</summary>'
+        f'  {"".join(items)}'
+        f'</details>'
+    )
 
 
 def _section_head(num: str, title_html: str, meta: str = "") -> None:
@@ -745,6 +1068,87 @@ def _bento_cell(label: str, value: str, hint: str = "", feature: bool = False) -
     )
 
 
+def _short_text(text: str, limit: int = 18) -> str:
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
+
+
+def _render_report_summary(
+    reports: list[EvaluationReport],
+    coverage,
+    avg_score: float,
+    avg_conf: float,
+) -> None:
+    rule_results = [rr for report in reports for rr in report.rule_results]
+    failed = [rr for rr in rule_results if rr.result == "fail"]
+    high_impact_failed = [
+        rr for rr in failed
+        if rr.severity in ("critical", "major")
+    ]
+    judge_disagreements = [
+        rr for rr in rule_results
+        if rr.confidence < 0.99 and rr.result not in ("not_applicable", "trigger_failed")
+    ]
+
+    lines = [
+        (
+            f"本次共运行 <strong>{len(reports)}</strong> 段测试对话，"
+            f"规则通过率 <strong>{avg_score:.0%}</strong>，"
+            f"Judge一致率 <strong>{avg_conf:.0%}</strong>。"
+        )
+    ]
+
+    if coverage.primary_attempted:
+        lines.append(
+            f"目标场景未触发率 <strong>{coverage.trigger_failure_rate:.0%}</strong>，"
+            f"<strong>{coverage.trigger_failed_count}/{coverage.primary_attempted}</strong> "
+            "个目标场景没有演出来；这部分优先看模拟器或测试场景，不直接算 Agent 失败。"
+        )
+
+    if failed:
+        top_rules = Counter(
+            (rr.rule_id, rr.description)
+            for rr in failed
+        ).most_common(3)
+        top_text = "、".join(
+            f"{rule_id} {_short_text(description)}"
+            + (f"（{count}次）" if count > 1 else "")
+            for (rule_id, description), count in top_rules
+        )
+        impact_text = (
+            f"其中关键/重要失败 <strong>{len(high_impact_failed)}</strong> 条"
+            if high_impact_failed
+            else "暂无关键/重要规则失败"
+        )
+        lines.append(
+            f"发现 <strong>{len(failed)}</strong> 条规则失败，{impact_text}；"
+            f"主要集中在 <strong>{escape(top_text)}</strong>。"
+        )
+    else:
+        lines.append(
+            "未发现规则失败；建议抽查 Judge 一致率较低或目标场景未触发的记录。"
+        )
+
+    if judge_disagreements:
+        lines.append(
+            f"有 <strong>{len(judge_disagreements)}</strong> 条规则出现 Judge 判断分歧，"
+            "展开明细可以看到每次 Judge 的证据差异。"
+        )
+    else:
+        lines.append("Judge 判断没有明显分歧，整体结果更适合作为交付报告直接展示。")
+
+    line_html = "".join(f'<div class="summary-line">{line}</div>' for line in lines)
+    st.markdown(
+        f'<div class="summary-box">'
+        f'  <div class="summary-title">评测结论摘要</div>'
+        f'  {line_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def _build_heatmap_df(reports: list[EvaluationReport]) -> pd.DataFrame:
     rows = []
     for report in reports:
@@ -753,8 +1157,8 @@ def _build_heatmap_df(reports: list[EvaluationReport]) -> pd.DataFrame:
             rows.append({
                 "规则": f"{rr.rule_id}  {rr.description[:26]}",
                 "rule_id": rr.rule_id,
-                "severity": rr.severity,
-                "画像": _persona_label(report.persona_type),
+                "规则等级": _severity_label(rr.severity),
+                "用户类型": _persona_label(report.persona_type),
                 "score": score,
             })
     df = pd.DataFrame(rows)
@@ -762,8 +1166,8 @@ def _build_heatmap_df(reports: list[EvaluationReport]) -> pd.DataFrame:
         return df
     return (
         df.dropna(subset=["score"])
-        .groupby(["规则", "rule_id", "severity", "画像"])
-        .agg(通过率=("score", "mean"), 样本数=("score", "count"))
+        .groupby(["规则", "rule_id", "规则等级", "用户类型"])
+        .agg(通过率=("score", "mean"), 测试对话数=("score", "count"))
         .reset_index()
     )
 
@@ -771,7 +1175,7 @@ def _build_heatmap_df(reports: list[EvaluationReport]) -> pd.DataFrame:
 def _render_heatmap(reports: list[EvaluationReport]) -> None:
     df = _build_heatmap_df(reports)
     if df.empty:
-        st.caption("无可视化数据")
+        st.caption("暂无可展示的规则通过情况")
         return
 
     height = max(280, 30 * df["规则"].nunique())
@@ -779,7 +1183,7 @@ def _render_heatmap(reports: list[EvaluationReport]) -> None:
         alt.Chart(df)
         .mark_rect(stroke="#ffffff", strokeWidth=2, cornerRadius=4)
         .encode(
-            x=alt.X("画像:N", title=None, axis=alt.Axis(
+            x=alt.X("用户类型:N", title=None, axis=alt.Axis(
                 labelAngle=0, labelPadding=10, ticks=False, domain=False, orient="top",
             )),
             y=alt.Y("规则:N", title=None, sort=alt.SortField("rule_id"),
@@ -792,10 +1196,10 @@ def _render_heatmap(reports: list[EvaluationReport]) -> None:
             ),
             tooltip=[
                 alt.Tooltip("规则:N"),
-                alt.Tooltip("画像:N"),
-                alt.Tooltip("severity:N", title="严重度"),
+                alt.Tooltip("用户类型:N"),
+                alt.Tooltip("规则等级:N"),
                 alt.Tooltip("通过率:Q", format=".0%"),
-                alt.Tooltip("样本数:Q"),
+                alt.Tooltip("测试对话数:Q"),
             ],
         )
         .properties(height=height)
@@ -808,7 +1212,7 @@ def _render_persona_bar(reports: list[EvaluationReport]) -> None:
     for r in reports:
         by_persona.setdefault(r.persona_type, []).append(r.score)
     df = pd.DataFrame([
-        {"画像": _persona_label(k), "得分": sum(v) / len(v)}
+        {"用户类型": _persona_label(k), "通过率": sum(v) / len(v)}
         for k, v in by_persona.items()
     ])
 
@@ -816,16 +1220,16 @@ def _render_persona_bar(reports: list[EvaluationReport]) -> None:
         alt.Chart(df)
         .mark_bar(cornerRadiusEnd=4, height=22)
         .encode(
-            y=alt.Y("画像:N", sort="-x", title=None,
+            y=alt.Y("用户类型:N", sort="-x", title=None,
                     axis=alt.Axis(labelPadding=10, ticks=False, domain=False)),
-            x=alt.X("得分:Q", scale=alt.Scale(domain=[0, 1]),
+            x=alt.X("通过率:Q", scale=alt.Scale(domain=[0, 1]),
                     axis=alt.Axis(format="%", title=None, grid=True)),
             color=alt.Color(
-                "得分:Q",
+                "通过率:Q",
                 scale=alt.Scale(range=["#dc2626", "#f59e0b", "#059669"], domain=[0, 0.5, 1]),
                 legend=None,
             ),
-            tooltip=[alt.Tooltip("画像:N"), alt.Tooltip("得分:Q", format=".0%")],
+            tooltip=[alt.Tooltip("用户类型:N"), alt.Tooltip("通过率:Q", format=".0%")],
         )
         .properties(height=max(200, 42 * len(df)))
     )
@@ -833,17 +1237,19 @@ def _render_persona_bar(reports: list[EvaluationReport]) -> None:
 
 
 def _render_session_card(item: dict, report: EvaluationReport) -> None:
-    def _badge(score: float) -> str:
-        if score >= 0.8: return "通过"
-        if score >= 0.5: return "待改进"
-        return "薄弱"
-
     persona_label = _persona_label(report.persona_type)
     session_label = item.get("simulator_label") or persona_label
+    session_result = _session_result_label(report)
+    timing = item.get("timing") or {}
+    timing_label = (
+        f"   ·   耗时 {_format_duration(timing.get('total_seconds'))}"
+        if timing else ""
+    )
     head = (
         f"{session_label}"
-        f"   ·   {_badge(report.score)} {report.score:.0%}"
-        f"   ·   置信度 {report.mean_confidence:.0%}"
+        f"   ·   {session_result}"
+        f"   ·   Judge一致率 {report.mean_confidence:.0%}"
+        f"{timing_label}"
     )
 
     with st.expander(head, expanded=False):
@@ -854,6 +1260,13 @@ def _render_session_card(item: dict, report: EvaluationReport) -> None:
                 for key, value in scenario_context.items()
             )
             st.caption(f"场景上下文：{context_text}")
+        if timing:
+            st.caption(
+                "耗时："
+                f"对话 {_format_duration(timing.get('dialogue_seconds'))} · "
+                f"评测 {_format_duration(timing.get('eval_seconds'))} · "
+                f"总计 {_format_duration(timing.get('total_seconds'))}"
+            )
         col_l, col_r = st.columns([1, 1.15])
 
         with col_l:
@@ -884,13 +1297,44 @@ def _render_session_card(item: dict, report: EvaluationReport) -> None:
                     "not_applicable": "—",
                     "trigger_failed": "⚠",
                 }[rr.result]
-                votes = " ".join(
-                    f'<span class="pill pill-neutral">{k}×{v}</span>'
-                    for k, v in rr.votes.items()
+                votes_text = _votes_text(rr.votes)
+                verdict = (
+                    f'<div class="rule-verdict">'
+                    f'<strong>结论：{_result_label(rr.result)}</strong>'
+                    f' · {_result_explanation(rr.result)}'
+                    f'{(" · 投票：" + escape(votes_text)) if votes_text else ""}'
+                    f'</div>'
                 )
                 evidence = (
-                    f'<div class="rule-evidence">{rr.evidence}</div>'
+                    _rule_detail_html("证据", rr.evidence, "rule-evidence")
                     if rr.result != "not_applicable" else ""
+                )
+                rationale = _rule_detail_html(
+                    "判定依据",
+                    getattr(rr, "rationale", ""),
+                    "rule-rationale",
+                )
+                matched_failure_criteria = getattr(
+                    rr,
+                    "matched_failure_criteria",
+                    [],
+                )
+                matched = _rule_detail_html(
+                    "命中失败标准",
+                    "；".join(matched_failure_criteria),
+                    "rule-rationale",
+                )
+                suggestion = (
+                    _rule_detail_html(
+                        "改进建议",
+                        getattr(rr, "suggestion", ""),
+                        "rule-suggestion",
+                    )
+                    if rr.result == "fail" else ""
+                )
+                samples = _samples_html(
+                    getattr(rr, "all_samples", []),
+                    getattr(rr, "evaluated_by", "llm_judge"),
                 )
                 # 触发信息条
                 trigger_info = ""
@@ -902,30 +1346,25 @@ def _render_session_card(item: dict, report: EvaluationReport) -> None:
                         )
                     elif rr.is_primary:
                         trigger_info = (
-                            '<div class="rule-trigger">⚠ 本场 primary 但未触发：simulator 没演到位</div>'
+                            '<div class="rule-trigger">⚠ 目标规则未触发：模拟用户没有演出目标场景</div>'
                         )
-                primary_tag = (
-                    '<span class="pill pill-brand">primary</span>' if rr.is_primary else ""
-                )
-                method_tag = (
-                    '<span class="pill pill-success">代码检查</span>'
-                    if rr.evaluated_by == "deterministic" else ""
-                )
                 rows.append(
                     f'<div class="rule-item">'
                     f'  <div class="rule-mark {mark_cls}">{mark_char}</div>'
                     f'  <div>'
-                    f'    <div class="rule-text">{rr.description}</div>'
+                    f'    <div class="rule-text">{escape(rr.description)}</div>'
                     f'    <div class="rule-meta-row">'
-                    f'      <span class="id">{rr.rule_id}</span>'
+                    f'      <span class="id">{escape(rr.rule_id)}</span>'
                     f'      {_sev_pill(rr.severity)}'
                     f'      {_conf_pill(rr.confidence)}'
-                    f'      {primary_tag}'
-                    f'      {method_tag}'
-                    f'      {votes}'
                     f'    </div>'
+                    f'    {verdict}'
                     f'    {trigger_info}'
                     f'    {evidence}'
+                    f'    {rationale}'
+                    f'    {matched}'
+                    f'    {suggestion}'
+                    f'    {samples}'
                     f'  </div>'
                     f'</div>'
                 )
@@ -943,7 +1382,7 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    st.markdown("### 测试画像")
+    st.markdown("### 用户类型")
     selected_personas = []
     for persona in ALL_PERSONAS:
         checked = st.checkbox(
@@ -956,18 +1395,18 @@ with st.sidebar:
 
     st.markdown("### 评测深度")
     judge_samples = st.select_slider(
-        " ",
+        "LLM Judge 采样次数",
         options=[1, 2, 3],
         value=1,
         format_func=lambda x: f"{x} 次采样" + (" · 快" if x == 1 else " · 稳" if x == 3 else ""),
-        label_visibility="collapsed",
-        help="每条规则的 LLM 评判次数。多采样可以输出置信度，但慢约 N 倍。",
+        help="每条目标规则的 LLM Judge 次数。多次判断可以看到 Judge 是否一致，但慢约 N 倍。",
         key="slider_judge_samples",
     )
+    st.caption(f"当前每条目标规则会评判 {judge_samples} 次，并保存每次 Judge 明细。")
 
-    st.markdown("### 占位符场景")
+    st.markdown("### 占位符取值")
     num_placeholder_sets = st.select_slider(
-        " ",
+        "占位符取值组数",
         options=[1, 2, 3],
         value=1,
         format_func=lambda x: (
@@ -975,8 +1414,7 @@ with st.sidebar:
             else f"{x} 组 · 标准+边界" if x == 2
             else f"{x} 组 · 标准+边界+高压"
         ),
-        label_visibility="collapsed",
-        help="为指令的占位符生成多组测试值，跑多遍以测试鲁棒性。",
+        help="为指令里的占位符生成多组填充值，跑多遍以测试鲁棒性。",
         key="slider_placeholder_sets",
     )
 
@@ -984,7 +1422,8 @@ with st.sidebar:
         f'<div class="side-stat">'
         f'  <div class="label">运行范围</div>'
         f'  <div class="value">单 Prompt 评测</div>'
-        f'  <div class="hint">{len(selected_personas)} 个画像筛选，最多展开 {num_placeholder_sets} 组占位符场景</div>'
+        f'  <div class="hint">{len(selected_personas)} 个用户类型筛选，'
+        f'{judge_samples} 次 Judge 采样，最多展开 {num_placeholder_sets} 组占位符取值</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -1006,8 +1445,8 @@ st.markdown(
             <em>指令遵循能力</em>。
         </h1>
         <p class="hero-sub">
-            粘贴任意任务型对话 Agent 指令，系统自动拆解为原子规则，并为每条规则生成目标驱动的用户测试用例，
-            通过多采样 LLM 评判，输出可解释、可量化的评测报告。
+            粘贴任意任务型对话 Agent 指令，系统自动拆解为原子规则，并为每条规则生成目标驱动的测试对话，
+            通过多次 Judge 判断，输出可解释、可量化的评测报告。
         </p>
         <div class="hero-meta">
             <div class="hero-meta-item">
@@ -1016,10 +1455,10 @@ st.markdown(
             </div>
             <div class="hero-meta-item">
                 <div class="label">可靠性</div>
-                <div class="value">多采样投票</div>
+                <div class="value">多次判断投票</div>
             </div>
             <div class="hero-meta-item">
-                <div class="label">覆盖度</div>
+                <div class="label">触发情况</div>
                 <div class="value">目标驱动模拟</div>
             </div>
         </div>
@@ -1059,8 +1498,55 @@ if run_clicked:
         st.error("缺少 DEEPSEEK_API_KEY 或 OPENAI_API_KEY，请在 agent/.env 中填写")
         st.stop()
 
-    with st.spinner("正在解析指令、提取占位符、生成测试场景..."):
-        simulation_plan = build_simulation_plan(instructions, num_sets=num_placeholder_sets)
+    run_started_at = _now_text()
+    run_timer_start = time.perf_counter()
+    plan_timer_start = time.perf_counter()
+    plan_status = st.empty()
+    plan_progress = st.progress(0.0, text="准备生成测试计划...")
+    plan_stage_state = {"message": "准备生成测试计划"}
+    plan_stage_progress = {
+        "1/6": 0.10,
+        "2/6": 0.25,
+        "3/6": 0.40,
+        "4/6": 0.55,
+        "5/6": 0.72,
+        "6/6": 0.88,
+    }
+
+    def _on_plan_progress(message: str) -> None:
+        plan_stage_state["message"] = message
+        prefix = message.split(" ", 1)[0]
+        progress_value = plan_stage_progress.get(prefix, 0.05)
+        plan_status.info(message)
+        plan_progress.progress(progress_value, text=message)
+
+    try:
+        with st.spinner("正在生成测试计划..."):
+            simulation_plan = build_simulation_plan(
+                instructions,
+                num_sets=num_placeholder_sets,
+                progress_callback=_on_plan_progress,
+            )
+    except Exception as exc:
+        elapsed = time.perf_counter() - run_timer_start
+        failed_stage = plan_stage_state["message"]
+        plan_progress.progress(1.0, text=f"{failed_stage} · 失败")
+        plan_status.error(f"测试计划生成失败：{failed_stage}")
+        st.error(f"{type(exc).__name__}: {exc}")
+        st.info(f"本次运行已耗时：{_format_duration(elapsed)}")
+        exc_text = str(exc)
+        if "超时" in exc_text or "RuleParser" in exc_text:
+            st.info(
+                "当前规则解析和评估判定使用 deepseek-v4-pro，辅助规划步骤使用 flash。"
+                "若指令很长，首次规则解析可能超过默认等待时间；"
+                "可以在 agent/.env 设置 LLM_REQUEST_TIMEOUT_SECONDS=180 或更大，"
+                "然后重启 Streamlit。"
+            )
+        st.stop()
+
+    plan_seconds = time.perf_counter() - plan_timer_start
+    plan_progress.progress(1.0, text="测试计划生成完成")
+    plan_status.success(f"测试计划生成完成 · {_format_duration(plan_seconds)}")
     parsed_rules = simulation_plan.parsed_rules
     agent_spec = simulation_plan.agent_spec
     sub_plans = simulation_plan.sub_plans
@@ -1077,7 +1563,7 @@ if run_clicked:
         if case.profile_type in selected_profile_types
     ]
     if not plan_case_pairs:
-        st.warning("当前画像筛选没有命中任何自动生成的测试用例。")
+        st.warning("当前用户类型筛选没有命中任何自动生成的测试对话。")
         st.stop()
 
     st.session_state.parsed_rules = parsed_rules
@@ -1088,13 +1574,13 @@ if run_clicked:
     n_cond = sum(1 for r in parsed_rules if r.rule_type == "conditional")
     n_forbid = sum(1 for r in parsed_rules if r.rule_type == "forbidden")
 
-    _section_head("02", "解析<em>规则</em> · 占位符场景", "rule_parser + placeholder_extractor + test_case_generator")
+    _section_head("02", "解析<em>规则</em> · 占位符取值", "rule_parser + placeholder_extractor + test case generator")
     st.markdown(
         f'<div class="bento">'
         f'{_bento_cell("规则总数", str(len(parsed_rules)), "原子可独立验证", feature=True)}'
         f'{_bento_cell("占位符", str(len(placeholders)), "自动识别")}'
-        f'{_bento_cell("场景组", str(len(sub_plans)), "每组一套填值")}'
-        f'{_bento_cell("测试用例", str(len(plan_case_pairs)), "场景 × 规则 = 当次跑数")}'
+        f'{_bento_cell("取值组", str(len(sub_plans)), "每组一套占位符填值")}'
+        f'{_bento_cell("测试对话数", str(len(plan_case_pairs)), "取值组 × 目标规则场景")}'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -1120,9 +1606,9 @@ if run_clicked:
     else:
         st.success(f"✅ {len(parsed_rules)} 条规则全部通过质量校验")
 
-    # 显示场景组概览
+    # 显示占位符取值组概览
     if placeholders:
-        with st.expander(f"📋 {len(sub_plans)} 组占位符场景明细", expanded=False):
+        with st.expander(f"📋 {len(sub_plans)} 组占位符取值明细", expanded=False):
             for sp in sub_plans:
                 values_str = "  ·  ".join(f"`{k}` = `{v}`" for k, v in sp.placeholder_values.items())
                 st.markdown(
@@ -1131,6 +1617,13 @@ if run_clicked:
 
     st.session_state.reports = []
     st.session_state.transcripts = []
+    st.session_state.run_timing = {
+        "started_at": run_started_at,
+        "finished_at": "",
+        "plan_seconds": plan_seconds,
+        "total_seconds": 0.0,
+        "sessions": [],
+    }
     st.session_state.run_complete = False
 
     total = len(plan_case_pairs)
@@ -1148,6 +1641,7 @@ if run_clicked:
         )
         session_id = f"{sub_plan.set_id}:{case.test_id}"
         target_rule = rules_by_id[case.target_rule_id]
+        session_timer_start = time.perf_counter()
         print(f"\n[{done + 1}/{total}] 开始 {session_label}", flush=True)
         progress.progress(
             done / total,
@@ -1168,20 +1662,37 @@ if run_clicked:
             sub_plan.placeholder_values,
             session_id=session_id,
         )
-        print("  agent.start()", flush=True)
-        agent_turn = outbound.start()
-        for turn_idx in range(MAX_TURNS):
-            if agent_turn.should_end:
-                print(f"  agent 结束于第 {turn_idx + 1} 轮", flush=True)
-                break
-            user_turn = simulator.reply(agent_turn.reply_text)
-            if user_turn.should_end:
-                outbound.record_user(user_turn.reply_text)
-                print(f"  user 结束于第 {turn_idx + 1} 轮", flush=True)
-                break
-            agent_turn = outbound.reply(user_turn.reply_text)
-        else:
-            print(f"  达到 MAX_TURNS={MAX_TURNS}", flush=True)
+        dialogue_timer_start = time.perf_counter()
+        try:
+            print("  agent.start()", flush=True)
+            agent_turn = outbound.start()
+            for turn_idx in range(MAX_TURNS):
+                if agent_turn.should_end:
+                    print(f"  agent 结束于第 {turn_idx + 1} 轮", flush=True)
+                    break
+                user_turn = simulator.reply(agent_turn.reply_text)
+                if user_turn.should_end:
+                    outbound.record_user(user_turn.reply_text)
+                    print(f"  user 结束于第 {turn_idx + 1} 轮", flush=True)
+                    break
+                agent_turn = outbound.reply(user_turn.reply_text)
+            else:
+                print(f"  达到 MAX_TURNS={MAX_TURNS}", flush=True)
+        except Exception as exc:
+            elapsed = time.perf_counter() - session_timer_start
+            progress.progress(
+                done / total,
+                text=f"对话生成失败 · {session_label}  ({done + 1}/{total})",
+            )
+            st.error(f"对话生成失败：{session_label}")
+            st.error(f"{type(exc).__name__}: {exc}")
+            st.info(f"当前 session 已耗时：{_format_duration(elapsed)}")
+            st.info(
+                "这通常是模型接口、网络连接抖动或结构化输出异常。系统已经自动重试；"
+                "仍失败时，可以直接重新开始本轮评测。"
+            )
+            st.stop()
+        dialogue_seconds = time.perf_counter() - dialogue_timer_start
 
         print(
             f"  开始评测目标规则 {case.target_rule_id} × {judge_samples} 采样",
@@ -1219,17 +1730,40 @@ if run_clicked:
             set_id=sub_plan.set_id,
             set_label=sub_plan.label,
         )
-        report = evaluate_session(
-            archive,
-            case.profile_type,
-            rules=[target_rule],
-            n_samples=judge_samples,
-            max_workers=8,
-            set_id=sub_plan.set_id,
-            set_label=sub_plan.label,
-        )
+        eval_timer_start = time.perf_counter()
+        try:
+            report = evaluate_session(
+                archive,
+                case.profile_type,
+                rules=[target_rule],
+                n_samples=judge_samples,
+                max_workers=8,
+                set_id=sub_plan.set_id,
+                set_label=sub_plan.label,
+            )
+        except Exception as exc:
+            elapsed = time.perf_counter() - session_timer_start
+            progress.progress(
+                done / total,
+                text=f"规则评测失败 · {session_label}  ({done + 1}/{total})",
+            )
+            st.error(f"规则评测失败：{session_label}")
+            st.error(f"{type(exc).__name__}: {exc}")
+            st.info(f"当前 session 已耗时：{_format_duration(elapsed)}")
+            st.info(
+                "如果失败点是 LLM Judge，通常是模型接口、网络连接抖动或结构化输出异常；"
+                "系统已经自动重试，仍失败时可以重新开始本轮评测。"
+            )
+            st.stop()
+        eval_seconds = time.perf_counter() - eval_timer_start
+        session_seconds = time.perf_counter() - session_timer_start
         append_evaluation_memory(archive, report, MEMORY_DIR)
-        print(f"  评测完成，得分 {report.score:.0%}", flush=True)
+        print(
+            f"  评测完成，通过率 {report.score:.0%}，"
+            f"耗时 {_format_duration(session_seconds)} "
+            f"(对话 {_format_duration(dialogue_seconds)} / 评测 {_format_duration(eval_seconds)})",
+            flush=True,
+        )
         item = {
             "session_id": session_id,
             "persona_type": case.profile_type,
@@ -1242,7 +1776,24 @@ if run_clicked:
             "set_label": sub_plan.label,
             "scenario_context": sub_plan.placeholder_values,
             "transcript": archive.transcript,
+            "timing": {
+                "dialogue_seconds": dialogue_seconds,
+                "eval_seconds": eval_seconds,
+                "total_seconds": session_seconds,
+            },
         }
+        st.session_state.run_timing["sessions"].append(
+            {
+                "session_id": session_id,
+                "session_label": session_label,
+                "target_rule_id": case.target_rule_id,
+                "persona_type": case.profile_type,
+                "case_type": case.case_type,
+                "dialogue_seconds": dialogue_seconds,
+                "eval_seconds": eval_seconds,
+                "total_seconds": session_seconds,
+            }
+        )
 
         st.session_state.reports.append(report)
         st.session_state.transcripts.append(item)
@@ -1250,9 +1801,17 @@ if run_clicked:
             _render_session_card(item, report)
 
         done += 1
-        progress.progress(done / total, text=f"已完成 · {session_label}  ({done}/{total})")
+        progress.progress(
+            done / total,
+            text=(
+                f"已完成 · {session_label}  ({done}/{total}) · "
+                f"{_format_duration(session_seconds)}"
+            ),
+        )
 
     progress.progress(1.0, text="评测完成 · 100%")
+    st.session_state.run_timing["finished_at"] = _now_text()
+    st.session_state.run_timing["total_seconds"] = time.perf_counter() - run_timer_start
     st.session_state.run_complete = True
 
 
@@ -1269,35 +1828,37 @@ if st.session_state.run_complete and st.session_state.reports:
     avg_conf = sum(r.mean_confidence for r in reports) / total
 
     _section_head("04", "评测<em>仪表板</em>", "全局指标汇总")
+    _render_report_summary(reports, coverage, avg_score, avg_conf)
 
     # 主指标行
     st.markdown(
         f'<div class="bento">'
-        f'{_bento_cell("综合得分", f"{avg_score:.0%}", f"共 {total} 个会话平均", feature=True)}'
-        f'{_bento_cell("条件覆盖率", f"{coverage.coverage_rate:.0%}", f"{coverage.triggered_conditional}/{coverage.total_conditional} 条规则被触发")}'
-        f'{_bento_cell("评估置信度", f"{avg_conf:.0%}", "LLM 自一致率")}'
-        f'{_bento_cell("会话总数", f"{total}", "场景组 × 目标用例")}'
+        f'{_bento_cell("规则通过率", f"{avg_score:.0%}", f"共 {total} 个会话平均", feature=True)}'
+        f'{_bento_cell("条件规则触发率", f"{coverage.coverage_rate:.0%}", f"{coverage.triggered_conditional}/{coverage.total_conditional} 条条件规则出现")}'
+        f'{_bento_cell("Judge一致率", f"{avg_conf:.0%}", "多次 Judge 判断的一致程度")}'
+        f'{_bento_cell("测试对话数", f"{total}", "本次实际运行的对话数")}'
         f'</div>',
         unsafe_allow_html=True,
     )
+    _render_timing_panel(st.session_state.get("run_timing", {}))
 
     # 模拟器质量行
     trigger_fail_label = (
-        f"{coverage.trigger_failed_count}/{coverage.primary_attempted} primary 失败"
-        if coverage.primary_attempted else "无 primary case"
+        f"{coverage.trigger_failed_count}/{coverage.primary_attempted} 个目标场景未演出"
+        if coverage.primary_attempted else "无目标测试"
     )
     st.markdown(
         f'<div class="bento">'
-        f'{_bento_cell("触发失败率", f"{coverage.trigger_failure_rate:.0%}", trigger_fail_label, feature=True)}'
-        f'{_bento_cell("Primary 总数", f"{coverage.primary_attempted}", "本次指派给具体规则的 session 数")}'
-        f'{_bento_cell("Primary 失败数", f"{coverage.trigger_failed_count}", "应该触发但 simulator 没演到位")}'
-        f'{_bento_cell("覆盖广度", f"{coverage.triggered_conditional}", "至少被触发一次的条件规则数")}'
+        f'{_bento_cell("目标场景未触发率", f"{coverage.trigger_failure_rate:.0%}", trigger_fail_label, feature=True)}'
+        f'{_bento_cell("目标场景测试数", f"{coverage.primary_attempted}", "指派给具体规则的测试对话数")}'
+        f'{_bento_cell("目标场景未触发数", f"{coverage.trigger_failed_count}", "模拟用户没有演出目标场景")}'
+        f'{_bento_cell("触发过的条件规则", f"{coverage.triggered_conditional}", "至少出现过一次触发条件")}'
         f'</div>',
         unsafe_allow_html=True,
     )
     st.caption(
-        "ℹ️ **触发失败率** 反映 simulator 在被指派的 case 上的失败比例。"
-        "数字越低，说明 test_case_generator + persona 设计越准。"
+        "ℹ️ **目标场景未触发率** 反映用户模拟器没有演出目标场景的比例；"
+        "它不是 Agent 失败率，数字越低说明测试对话更准确。"
     )
 
     # Evaluator 类型分布行
@@ -1306,28 +1867,28 @@ if st.session_state.run_complete and st.session_state.reports:
     )
     llm_count = len(parsed_rules) - det_count
     det_rate = det_count / len(parsed_rules) if parsed_rules else 0
-    det_label = "无可代码化规则" if det_count == 0 else f"{det_count}/{len(parsed_rules)} 条规则走代码"
+    det_label = "无确定性规则" if det_count == 0 else f"{det_count}/{len(parsed_rules)} 条规则走确定性检查"
     st.markdown(
         f'<div class="bento">'
-        f'{_bento_cell("代码检查覆盖率", f"{det_rate:.0%}", det_label, feature=True)}'
-        f'{_bento_cell("代码 checker 规则", f"{det_count}", "确定性 / 0 LLM 调用 / 100% 准确")}'
-        f'{_bento_cell("LLM judge 规则", f"{llm_count}", "需语义判断，靠多采样置信度")}'
-        f'{_bento_cell("LLM 调用节省", f"{det_count * total}", "估算 = 代码 checker 规则数 × session 数")}'
+        f'{_bento_cell("确定性检查占比", f"{det_rate:.0%}", det_label, feature=True)}'
+        f'{_bento_cell("确定性规则", f"{det_count}", "字数 / 关键词 / PII 等可代码判断")}'
+        f'{_bento_cell("语义Judge规则", f"{llm_count}", "需要 LLM 判断语义是否合规")}'
+        f'{_bento_cell("预计节省Judge调用", f"{det_count * total}", "估算 = 确定性规则数 × 测试对话数")}'
         f'</div>',
         unsafe_allow_html=True,
     )
     st.caption(
         "ℹ️ **Hybrid Evaluator**：确定性规则（字数、关键词、PII）用代码 100% 准确判定，"
-        "语义规则才走 LLM judge + 多采样投票。"
+        "语义规则才走 LLM Judge + 多次采样投票。"
     )
 
-    _section_head("05", "规则 × <em>测试画像</em>热力图", "红=低通过率 / 绿=高通过率")
+    _section_head("05", "规则表现 · <em>按用户类型</em>", "红=容易失败 / 绿=稳定通过")
     _render_heatmap(reports)
 
-    _section_head("06", "<em>测试画像</em>得分排名", "哪类用户最容易暴露问题")
+    _section_head("06", "<em>用户类型</em>通过率对比", "哪类用户更容易暴露问题")
     _render_persona_bar(reports)
 
-    _section_head("07", "模拟器<em>覆盖度</em>", "证明模拟器的充分性")
+    _section_head("07", "模拟器<em>触发情况</em>", "区分 Agent 失败和场景未触发")
 
     if coverage.untriggered_rules:
         with st.expander(
@@ -1352,7 +1913,7 @@ if st.session_state.run_complete and st.session_state.reports:
             st.markdown(f'<div class="rule-list">{"".join(rows)}</div>', unsafe_allow_html=True)
 
     if coverage.triggered_by_persona:
-        with st.expander("各测试画像触发的条件规则", expanded=False):
+        with st.expander("各用户类型触发过的条件规则", expanded=False):
             for persona_type, rule_ids in sorted(coverage.triggered_by_persona.items()):
                 tags = " ".join(
                     f'<span class="pill pill-brand">{rid}</span>'
@@ -1366,6 +1927,6 @@ if st.session_state.run_complete and st.session_state.reports:
                     unsafe_allow_html=True,
                 )
 
-    _section_head("08", "会话<em>归档</em>", f"共 {total} 个对话")
+    _section_head("08", "逐条<em>测试记录</em>", f"共 {total} 个对话")
     for item, report in zip(st.session_state.transcripts, reports):
         _render_session_card(item, report)
