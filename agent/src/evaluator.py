@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import statistics
 from collections import Counter
 from collections.abc import Callable
@@ -14,6 +15,40 @@ from .rules import Rule, RULES, SEVERITY_WEIGHTS
 from .types import SessionArchive
 
 JUDGE_SAMPLES = 3
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(0, value)
+
+
+def _judge_request_timeout_seconds() -> float:
+    return _env_float("JUDGE_REQUEST_TIMEOUT_SECONDS", 60.0)
+
+
+def _judge_max_retries() -> int:
+    return _env_int("JUDGE_MAX_RETRIES", 3)
+
+
+def _judge_parse_max_retries() -> int:
+    return _env_int("JUDGE_PARSE_MAX_RETRIES", 1)
 
 RuleResultLiteral = Literal["pass", "fail", "not_applicable", "trigger_failed"]
 
@@ -214,6 +249,9 @@ _judge_agent = Agent(
     ),
     model="deepseek-v4-pro",
     output_type=JudgeOutput,
+    request_timeout_seconds=_judge_request_timeout_seconds(),
+    max_retries=_judge_max_retries(),
+    parse_max_retries=_judge_parse_max_retries(),
 )
 
 
@@ -298,6 +336,9 @@ _trigger_judge_agent = Agent(
     ),
     model="deepseek-v4-pro",
     output_type=TriggerJudgeOutput,
+    request_timeout_seconds=_judge_request_timeout_seconds(),
+    max_retries=_judge_max_retries(),
+    parse_max_retries=_judge_parse_max_retries(),
 )
 
 
@@ -318,6 +359,9 @@ _compliance_judge_agent = Agent(
     ),
     model="deepseek-v4-pro",
     output_type=ComplianceJudgeOutput,
+    request_timeout_seconds=_judge_request_timeout_seconds(),
+    max_retries=_judge_max_retries(),
+    parse_max_retries=_judge_parse_max_retries(),
 )
 
 
@@ -378,7 +422,23 @@ def _build_compliance_prompt(
     )
 
 
-def _run_trigger_judge_once(prompt: str, rule_id: str) -> TriggerJudgeOutput:
+def _emit_progress(callback: Callable[[str], None] | None, message: str) -> None:
+    if callback is not None:
+        callback(message)
+
+
+def _run_trigger_judge_once(
+    prompt: str,
+    rule_id: str,
+    sample_index: int | None = None,
+    total_samples: int | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+) -> TriggerJudgeOutput:
+    if sample_index is not None and total_samples is not None:
+        _emit_progress(
+            progress_callback,
+            f"TriggerJudge · {rule_id} · sample {sample_index}/{total_samples}",
+        )
     result = Runner.run_sync(_trigger_judge_agent, prompt)
     output = result.final_output
     if not isinstance(output, TriggerJudgeOutput):
@@ -386,7 +446,18 @@ def _run_trigger_judge_once(prompt: str, rule_id: str) -> TriggerJudgeOutput:
     return output
 
 
-def _run_compliance_judge_once(prompt: str, rule_id: str) -> ComplianceJudgeOutput:
+def _run_compliance_judge_once(
+    prompt: str,
+    rule_id: str,
+    sample_index: int | None = None,
+    total_samples: int | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+) -> ComplianceJudgeOutput:
+    if sample_index is not None and total_samples is not None:
+        _emit_progress(
+            progress_callback,
+            f"ComplianceJudge · {rule_id} · sample {sample_index}/{total_samples}",
+        )
     result = Runner.run_sync(_compliance_judge_agent, prompt)
     output = result.final_output
     if not isinstance(output, ComplianceJudgeOutput):
@@ -456,6 +527,7 @@ def _evaluate_conditional_two_step(
     compliance_outputs_provider: (
         Callable[[int, str], list[ComplianceJudgeOutput]] | None
     ) = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> RuleResult:
     """两步评测 conditional 规则。
 
@@ -468,8 +540,14 @@ def _evaluate_conditional_two_step(
     trigger_prompt = _build_trigger_prompt(rule, transcript_text)
     if trigger_outputs is None:
         trigger_outputs = [
-            _run_trigger_judge_once(trigger_prompt, rule.rule_id)
-            for _ in range(n_samples)
+            _run_trigger_judge_once(
+                trigger_prompt,
+                rule.rule_id,
+                sample_index=sample_index,
+                total_samples=n_samples,
+                progress_callback=progress_callback,
+            )
+            for sample_index in range(1, n_samples + 1)
         ]
     trigger_outputs = [
         _normalize_trigger_output(output)
@@ -546,8 +624,14 @@ def _evaluate_conditional_two_step(
         )
     else:
         compliance_outputs = [
-            _run_compliance_judge_once(compliance_prompt, rule.rule_id)
-            for _ in range(n_samples)
+            _run_compliance_judge_once(
+                compliance_prompt,
+                rule.rule_id,
+                sample_index=sample_index,
+                total_samples=n_samples,
+                progress_callback=progress_callback,
+            )
+            for sample_index in range(1, n_samples + 1)
         ]
 
     compliance_counter: Counter[bool] = Counter(o.compliant for o in compliance_outputs)
@@ -608,7 +692,18 @@ def _format_transcript(archive: SessionArchive) -> str:
     return "\n".join(lines)
 
 
-def _run_judge_once(prompt: str, rule_id: str) -> JudgeOutput:
+def _run_judge_once(
+    prompt: str,
+    rule_id: str,
+    sample_index: int | None = None,
+    total_samples: int | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+) -> JudgeOutput:
+    if sample_index is not None and total_samples is not None:
+        _emit_progress(
+            progress_callback,
+            f"RuleJudge · {rule_id} · sample {sample_index}/{total_samples}",
+        )
     result = Runner.run_sync(_judge_agent, prompt)
     output = result.final_output
     if not isinstance(output, JudgeOutput):
@@ -769,6 +864,7 @@ def evaluate_session(
     max_workers: int = 16,  # 保留参数兼容，但已不使用
     set_id: str | None = None,
     set_label: str | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> EvaluationReport:
     if n_samples <= 0:
         raise ValueError("n_samples must be greater than 0")
@@ -816,6 +912,7 @@ def evaluate_session(
         is_primary = (target_rule_id is not None and rule.rule_id == target_rule_id)
 
         if rule.checks:
+            _emit_progress(progress_callback, f"deterministic checker · {rule.rule_id}")
             # 代码 checker：1 次确定性运行
             outcome = run_checks_combined(rule.checks, archive)
             outputs = [_outcome_to_judge_output(outcome)]
@@ -836,6 +933,7 @@ def evaluate_session(
                 transcript_text,
                 n_samples=n_samples,
                 is_primary=is_primary,
+                progress_callback=progress_callback,
             )
             rule_results.append(result)
             phase_count = len(
@@ -854,8 +952,14 @@ def evaluate_session(
             # 单步 LLM judge × N 采样（required / forbidden）
             prompt = single_step_prompts[rule.rule_id]
             outputs = [
-                _run_judge_once(prompt, rule.rule_id)
-                for _ in range(n_samples)
+                _run_judge_once(
+                    prompt,
+                    rule.rule_id,
+                    sample_index=sample_index,
+                    total_samples=n_samples,
+                    progress_callback=progress_callback,
+                )
+                for sample_index in range(1, n_samples + 1)
             ]
             rule_results.append(
                 _aggregate_votes(

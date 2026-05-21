@@ -66,9 +66,10 @@ cp agent/.env.example agent/.env
 # 编辑 agent/.env，填写 DEEPSEEK_API_KEY
 # DeepSeek 兼容 OpenAI 接口，base URL 使用 https://api.deepseek.com
 # 默认模型分层：规则解析/Judge 判定用 deepseek-v4-pro，职责归纳/占位符/模拟对话用 deepseek-v4-flash
-# 可选：DEEPSEEK_REASONING_EFFORT=low 加快规划阶段；LLM_REQUEST_TIMEOUT_SECONDS=180 控制单次请求超时
+# 可选：DEEPSEEK_REASONING_EFFORT=low 加快规划阶段；LLM_REQUEST_TIMEOUT_SECONDS=180 控制规划/对话请求超时
 # 可选：LLM_MAX_RETRIES=2；LLM_RETRY_DELAY_SECONDS=1 控制网络/SSL 断连后的自动重试
 # 可选：LLM_PARSE_MAX_RETRIES=1 控制结构化 JSON 输出异常后的修复重试
+# 可选：JUDGE_REQUEST_TIMEOUT_SECONDS=60；JUDGE_MAX_RETRIES=3 控制评测 Judge 超时重试
 # 可选：DEEPSEEK_THINKING_ENABLED=true 才显式开启 thinking；默认关闭以避免规划阶段卡住
 ```
 

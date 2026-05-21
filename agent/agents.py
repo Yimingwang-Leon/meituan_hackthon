@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -14,6 +15,9 @@ class Agent:
     instructions: str
     model: str
     output_type: type | None = None
+    request_timeout_seconds: float | None = None
+    max_retries: int | None = None
+    parse_max_retries: int | None = None
 
 
 @dataclass
@@ -34,7 +38,9 @@ class Runner:
     def run_sync(agent: Agent, input_data: str | list[dict[str, str]]) -> _RunResult:
         messages = _normalize_messages(input_data)
         attempt_messages = messages
-        max_parse_retries = _get_parse_max_retries() if agent.output_type is not None else 0
+        max_parse_retries = (
+            _resolve_parse_max_retries(agent) if agent.output_type is not None else 0
+        )
         raw_text = ""
         for attempt in range(max_parse_retries + 1):
             raw_text = _chat_completion(agent, attempt_messages)
@@ -76,10 +82,11 @@ def trace(*args: Any, **kwargs: Any):
 def _chat_completion(agent: Agent, messages: list[dict[str, str]]) -> str:
     from openai import OpenAI
 
+    request_timeout = _resolve_request_timeout(agent)
     client = OpenAI(
         api_key=_get_api_key(),
         base_url=_get_base_url(),
-        timeout=_get_request_timeout(),
+        timeout=request_timeout,
     )
     request_kwargs: dict[str, Any] = {
         "model": agent.model,
@@ -91,20 +98,51 @@ def _chat_completion(agent: Agent, messages: list[dict[str, str]]) -> str:
     if extra_body:
         request_kwargs["extra_body"] = extra_body
 
-    max_retries = _get_max_retries()
+    max_retries = _resolve_max_retries(agent)
     last_exc: Exception | None = None
+    total_attempts = max_retries + 1
     for attempt in range(max_retries + 1):
+        attempt_no = attempt + 1
+        attempt_start = time.perf_counter()
+        timeout_logged = threading.Event()
+
+        def _log_request_timeout() -> None:
+            if timeout_logged.is_set():
+                return
+            timeout_logged.set()
+            print(
+                f"  {agent.name} 调用 {agent.model} 等待超过 "
+                f"{request_timeout:.0f}s，尚未收到模型响应"
+                f"（第 {attempt_no}/{total_attempts} 次请求）",
+                flush=True,
+            )
+
+        timeout_timer = threading.Timer(request_timeout, _log_request_timeout)
+        timeout_timer.daemon = True
+        timeout_timer.start()
         try:
             response = client.chat.completions.create(**request_kwargs)
             break
         except Exception as exc:
             last_exc = exc
+            elapsed = time.perf_counter() - attempt_start
+            if (
+                (_looks_like_timeout(exc) or elapsed >= request_timeout * 0.95)
+                and not timeout_logged.is_set()
+            ):
+                timeout_logged.set()
+                print(
+                    f"  {agent.name} 调用 {agent.model} 请求超时："
+                    f"等待 {_format_seconds(elapsed)} 后仍未收到模型响应"
+                    f"（单次超时 {request_timeout:.0f}s，"
+                    f"第 {attempt_no}/{total_attempts} 次请求）",
+                    flush=True,
+                )
             if attempt >= max_retries:
-                timeout = _get_request_timeout()
-                retry_text = f"已重试 {max_retries} 次。" if max_retries else "未开启重试。"
+                retry_text = f"已用完 {max_retries} 次重试机会。" if max_retries else "未开启重试。"
                 raise RuntimeError(
                     f"{agent.name} 调用 {agent.model} 失败或超时。"
-                    f"当前单次请求超时 {timeout:.0f}s，{retry_text}"
+                    f"当前单次请求超时 {request_timeout:.0f}s，{retry_text}"
                     "如果是 SSL EOF / Connection error，通常是网络或服务端连接抖动；"
                     "如果卡在规则解析/测试计划生成，通常是指令较长或当前模型响应较慢。"
                     "可在 agent/.env 设置 LLM_MAX_RETRIES=2、"
@@ -115,11 +153,14 @@ def _chat_completion(agent: Agent, messages: list[dict[str, str]]) -> str:
             delay = _get_retry_delay_seconds() * (2 ** attempt)
             print(
                 f"  {agent.name} 调用 {agent.model} 失败，"
-                f"{delay:.1f}s 后重试 {attempt + 1}/{max_retries}："
+                f"{delay:.1f}s 后使用第 {attempt + 1}/{max_retries} 次重试机会："
                 f"{_root_error_summary(exc)}",
                 flush=True,
             )
             time.sleep(delay)
+        finally:
+            timeout_logged.set()
+            timeout_timer.cancel()
     else:
         raise RuntimeError(f"{agent.name} 调用 {agent.model} 未返回结果") from last_exc
 
@@ -310,6 +351,12 @@ def _get_request_timeout() -> float:
     return timeout if timeout > 0 else 180.0
 
 
+def _resolve_request_timeout(agent: Agent) -> float:
+    if agent.request_timeout_seconds is None:
+        return _get_request_timeout()
+    return agent.request_timeout_seconds if agent.request_timeout_seconds > 0 else 180.0
+
+
 def _get_max_retries() -> int:
     raw_retries = (
         os.getenv("DEEPSEEK_MAX_RETRIES")
@@ -324,6 +371,12 @@ def _get_max_retries() -> int:
     return max(0, retries)
 
 
+def _resolve_max_retries(agent: Agent) -> int:
+    if agent.max_retries is None:
+        return _get_max_retries()
+    return max(0, agent.max_retries)
+
+
 def _get_parse_max_retries() -> int:
     raw_retries = (
         os.getenv("DEEPSEEK_PARSE_MAX_RETRIES")
@@ -336,6 +389,12 @@ def _get_parse_max_retries() -> int:
     except ValueError:
         retries = 1
     return max(0, retries)
+
+
+def _resolve_parse_max_retries(agent: Agent) -> int:
+    if agent.parse_max_retries is None:
+        return _get_parse_max_retries()
+    return max(0, agent.parse_max_retries)
 
 
 def _get_retry_delay_seconds() -> float:
@@ -360,6 +419,19 @@ def _root_error_summary(exc: BaseException) -> str:
         current = current.__cause__
     message = str(current).strip()
     return f"{type(current).__name__}: {message}" if message else type(current).__name__
+
+
+def _looks_like_timeout(exc: BaseException) -> bool:
+    text = _root_error_summary(exc).lower()
+    return any(marker in text for marker in ("timeout", "timed out", "readtimeout"))
+
+
+def _format_seconds(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    remainder = seconds - minutes * 60
+    return f"{minutes}m {remainder:.0f}s"
 
 
 def _get_reasoning_effort() -> str:

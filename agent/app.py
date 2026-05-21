@@ -1448,6 +1448,23 @@ def _case_session_label(sub_plan, case) -> str:
     )
 
 
+def _update_case_stage(stage_state: dict | None, stage: str) -> None:
+    if stage_state is None:
+        return
+    stage_state["stage"] = stage
+    stage_state["updated_at"] = time.perf_counter()
+
+
+def _case_stage_summary(meta: dict, now: float) -> tuple[str, float | None]:
+    stage_state = meta.get("stage_state") or {}
+    stage = str(stage_state.get("stage") or "未知阶段")
+    updated_at = stage_state.get("updated_at")
+    try:
+        return stage, max(0.0, now - float(updated_at))
+    except (TypeError, ValueError):
+        return stage, None
+
+
 def _run_test_case(
     index: int,
     total: int,
@@ -1456,11 +1473,13 @@ def _run_test_case(
     agent_spec,
     target_rule,
     judge_samples: int,
+    stage_state: dict | None = None,
 ) -> TestRunResult:
     session_label = _case_session_label(sub_plan, case)
     session_id = f"{sub_plan.set_id}:{case.test_id}"
     session_timer_start = time.perf_counter()
     print(f"\n[{index}/{total}] 开始 {session_label}", flush=True)
+    _update_case_stage(stage_state, "初始化会话")
 
     agent = make_outbound_agent(sub_plan.filled_instruction)
     session_meta = SessionMeta(
@@ -1480,23 +1499,30 @@ def _run_test_case(
     dialogue_timer_start = time.perf_counter()
     try:
         print(f"  [{index}/{total}] agent.start()", flush=True)
+        _update_case_stage(stage_state, "对话生成 · agent.start()")
         agent_turn = outbound.start()
         for turn_idx in range(MAX_TURNS):
             if agent_turn.should_end:
+                _update_case_stage(stage_state, f"对话生成 · agent 结束于第 {turn_idx + 1} 轮")
                 print(f"  [{index}/{total}] agent 结束于第 {turn_idx + 1} 轮", flush=True)
                 break
+            _update_case_stage(stage_state, f"对话生成 · UserSimulator 第 {turn_idx + 1} 轮")
             user_turn = simulator.reply(agent_turn.reply_text)
             if user_turn.should_end:
+                _update_case_stage(stage_state, f"对话生成 · user 结束于第 {turn_idx + 1} 轮")
                 outbound.record_user(user_turn.reply_text)
                 print(f"  [{index}/{total}] user 结束于第 {turn_idx + 1} 轮", flush=True)
                 break
+            _update_case_stage(stage_state, f"对话生成 · OutboundAgent 第 {turn_idx + 1} 轮回复")
             agent_turn = outbound.reply(user_turn.reply_text)
         else:
+            _update_case_stage(stage_state, f"对话生成 · 达到 MAX_TURNS={MAX_TURNS}")
             print(f"  [{index}/{total}] 达到 MAX_TURNS={MAX_TURNS}", flush=True)
     except Exception as exc:
         raise RuntimeError(f"对话生成失败：{session_label}") from exc
     dialogue_seconds = time.perf_counter() - dialogue_timer_start
 
+    _update_case_stage(stage_state, "保存 session archive")
     outbound.save_archive(
         SESSIONS_DIR,
         "agent_end",
@@ -1530,6 +1556,11 @@ def _run_test_case(
         f"  [{index}/{total}] 开始评测目标规则 {case.target_rule_id} × {judge_samples} 采样",
         flush=True,
     )
+    _update_case_stage(stage_state, f"评测准备 · {case.target_rule_id} × {judge_samples} 采样")
+
+    def _on_eval_progress(message: str) -> None:
+        _update_case_stage(stage_state, f"评测 · {message}")
+
     eval_timer_start = time.perf_counter()
     try:
         report = evaluate_session(
@@ -1540,11 +1571,13 @@ def _run_test_case(
             max_workers=1,
             set_id=sub_plan.set_id,
             set_label=sub_plan.label,
+            progress_callback=_on_eval_progress,
         )
     except Exception as exc:
         raise RuntimeError(f"规则评测失败：{session_label}") from exc
     eval_seconds = time.perf_counter() - eval_timer_start
     session_seconds = time.perf_counter() - session_timer_start
+    _update_case_stage(stage_state, "评测完成 · 组装结果")
 
     print(
         f"  [{index}/{total}] 评测完成，通过率 {report.score:.0%}，"
@@ -1928,6 +1961,10 @@ if run_clicked:
             return
         index, sub_plan, case = pending_cases.popleft()
         target_rule = rules_by_id[case.target_rule_id]
+        stage_state = {
+            "stage": "排队等待执行",
+            "updated_at": time.perf_counter(),
+        }
         future = executor.submit(
             _run_test_case,
             index,
@@ -1937,11 +1974,13 @@ if run_clicked:
             agent_spec,
             target_rule,
             judge_samples,
+            stage_state,
         )
         active_futures[future] = {
             "index": index,
             "label": _case_session_label(sub_plan, case),
             "started_at": time.perf_counter(),
+            "stage_state": stage_state,
         }
 
     try:
@@ -1971,11 +2010,19 @@ if run_clicked:
                         done / total,
                         text=f"单案例超时 · 已完成 {done}/{total}",
                     )
-                    timeout_lines = "\n".join(
-                        f"- [{meta['index']}/{total}] {meta['label']} · "
-                        f"已运行 {_format_duration(elapsed)}"
-                        for _, meta, elapsed in timed_out
-                    )
+                    timeout_parts = []
+                    for _, meta, elapsed in timed_out:
+                        stage, stage_elapsed = _case_stage_summary(meta, now)
+                        stage_suffix = (
+                            f" · 阶段持续 {_format_duration(stage_elapsed)}"
+                            if stage_elapsed is not None else ""
+                        )
+                        timeout_parts.append(
+                            f"- [{meta['index']}/{total}] {meta['label']} · "
+                            f"已运行 {_format_duration(elapsed)} · 当前阶段：{stage}"
+                            f"{stage_suffix}"
+                        )
+                    timeout_lines = "\n".join(timeout_parts)
                     st.error(
                         "测试执行超时，已停止提交后续任务。"
                         f"单案例超时阈值：{_format_duration(case_timeout_seconds)}。"
@@ -1989,16 +2036,19 @@ if run_clicked:
                     st.stop()
 
                 if active_futures:
-                    longest_elapsed = max(
-                        now - meta["started_at"]
-                        for meta in active_futures.values()
+                    longest_meta = max(
+                        active_futures.values(),
+                        key=lambda meta: now - meta["started_at"],
                     )
+                    longest_elapsed = now - longest_meta["started_at"]
+                    longest_stage, _ = _case_stage_summary(longest_meta, now)
                     progress.progress(
                         done / total,
                         text=(
                             f"运行中 · 已完成 {done}/{total} · "
                             f"正在执行 {len(active_futures)} 个 · "
-                            f"最长运行 {_format_duration(longest_elapsed)}"
+                            f"最长运行 {_format_duration(longest_elapsed)} · "
+                            f"{longest_stage}"
                         ),
                     )
                 continue
@@ -2016,8 +2066,14 @@ if run_clicked:
                         done / total,
                         text=f"并行执行失败 · 已完成 {done}/{total}",
                     )
+                    stage, stage_elapsed = _case_stage_summary(meta, time.perf_counter())
+                    stage_suffix = (
+                        f"（阶段持续 {_format_duration(stage_elapsed)}）"
+                        if stage_elapsed is not None else ""
+                    )
                     st.error("测试执行失败，已取消尚未开始的任务。")
                     st.error(f"失败案例：[{meta['index']}/{total}] {meta['label']}")
+                    st.error(f"失败阶段：{stage}{stage_suffix}")
                     st.error(f"{type(exc).__name__}: {exc}")
                     root = exc.__cause__
                     if root is not None:
