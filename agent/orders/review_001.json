@@ -1,9 +1,0 @@
-{
-  "userName": "孙先生",
-  "orderId": "review_001",
-  "eta": "2026-05-10 13:00",
-  "address": "上海市黄浦区某餐厅附近",
-  "scenario": "review",
-  "taskContext": "用户对昨日订单给出 2 星差评，反馈配送超时，需回访了解具体原因",
-  "storeName": "沙县小吃（黄浦店）"
-}

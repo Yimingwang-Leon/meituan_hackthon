@@ -8,7 +8,12 @@ from dotenv import load_dotenv
 
 from src.evaluator import EvaluationReport, evaluate_session
 from src.memory import append_evaluation_memory
+from src.rules import RULES, Rule
 from src.types import SessionArchive, TranscriptEntry
+
+
+def _has_llm_api_key() -> bool:
+    return bool(os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"))
 
 
 def _load_archive(path: Path) -> SessionArchive:
@@ -22,18 +27,51 @@ def _load_archive(path: Path) -> SessionArchive:
         for entry in raw["transcript"]
     ]
     return SessionArchive(
-        order_id=raw["order_id"],
-        user_name=raw["user_name"],
-        source_file=raw["source_file"],
+        session_id=raw.get("session_id") or raw.get("order_id") or path.stem,
         started_at=raw["started_at"],
         ended_at=raw["ended_at"],
         ended_by=raw["ended_by"],
         transcript=transcript,
+        source_label=raw.get("source_label") or raw.get("source_file"),
+        instruction_snapshot=raw.get("instruction_snapshot"),
+        scenario_context=raw.get("scenario_context") or {},
         persona_type=raw.get("persona_type"),
+        case_type=raw.get("case_type"),
         simulator_label=raw.get("simulator_label"),
         test_case_id=raw.get("test_case_id"),
         target_rule_id=raw.get("target_rule_id"),
+        target_rule_type=raw.get("target_rule_type"),
+        target_rule_description=raw.get("target_rule_description"),
+        target_rule_evaluation_hint=raw.get("target_rule_evaluation_hint"),
+        target_rule_severity=raw.get("target_rule_severity"),
+        set_id=raw.get("set_id"),
+        set_label=raw.get("set_label"),
     )
+
+
+def _rule_from_archive(archive: SessionArchive) -> Rule | None:
+    if not (
+        archive.target_rule_id
+        and archive.target_rule_type
+        and archive.target_rule_description
+        and archive.target_rule_evaluation_hint
+        and archive.target_rule_severity
+    ):
+        return None
+
+    return Rule(
+        rule_id=archive.target_rule_id,
+        rule_type=archive.target_rule_type,
+        description=archive.target_rule_description,
+        evaluation_hint=archive.target_rule_evaluation_hint,
+        severity=archive.target_rule_severity,
+    )
+
+
+def _fallback_rule_by_id(rule_id: str | None) -> Rule | None:
+    if not rule_id:
+        return None
+    return next((rule for rule in RULES if rule.rule_id == rule_id), None)
 
 
 def _save_report(reports: list[EvaluationReport], output_dir: Path) -> str:
@@ -67,7 +105,7 @@ def _save_report(reports: list[EvaluationReport], output_dir: Path) -> str:
         },
         "sessions": [
             {
-                "order_id": r.order_id,
+                "session_id": r.session_id,
                 "persona_type": r.persona_type,
                 "score": round(r.score, 4),
                 "rules": [
@@ -77,6 +115,15 @@ def _save_report(reports: list[EvaluationReport], output_dir: Path) -> str:
                         "description": rr.description,
                         "result": rr.result,
                         "evidence": rr.evidence,
+                        "rationale": rr.rationale,
+                        "matched_failure_criteria": rr.matched_failure_criteria,
+                        "suggestion": rr.suggestion,
+                        "confidence": rr.confidence,
+                        "votes": rr.votes,
+                        "evaluated_by": rr.evaluated_by,
+                        "judge_model": rr.judge_model,
+                        "judge_prompt": rr.judge_prompt,
+                        "all_samples": rr.all_samples,
                     }
                     for rr in r.rule_results
                 ],
@@ -136,8 +183,8 @@ def main() -> None:
     project_root = Path(__file__).resolve().parent
     load_dotenv(project_root / ".env")
 
-    if not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError("缺少 OPENAI_API_KEY，请在 agent/.env 中填写")
+    if not _has_llm_api_key():
+        raise RuntimeError("缺少 DEEPSEEK_API_KEY 或 OPENAI_API_KEY，请在 agent/.env 中填写")
 
     sessions_dir = project_root / "sessions"
     memory_dir = project_root / "memory"
@@ -153,7 +200,14 @@ def main() -> None:
         print(f"\n评估：{path.name}")
         archive = _load_archive(path)
         persona_type = archive.persona_type or "unknown"
-        report = evaluate_session(archive, persona_type)
+        target_rule = _rule_from_archive(archive) or _fallback_rule_by_id(archive.target_rule_id)
+        report = evaluate_session(
+            archive,
+            persona_type,
+            rules=[target_rule] if target_rule is not None else None,
+            set_id=archive.set_id,
+            set_label=archive.set_label,
+        )
         append_evaluation_memory(archive, report, memory_dir)
         print(report.summary())
         reports.append(report)

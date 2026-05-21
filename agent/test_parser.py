@@ -8,10 +8,11 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
-if not os.getenv("OPENAI_API_KEY"):
-    raise RuntimeError("缺少 OPENAI_API_KEY")
+if not (os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")):
+    raise RuntimeError("缺少 DEEPSEEK_API_KEY 或 OPENAI_API_KEY")
 
 from src.rule_parser import parse_rules
+from src.rule_validation import print_validation_report, validate_rules
 
 instructions_dir = Path(__file__).parent / "instructions"
 
@@ -24,4 +25,15 @@ for path in sorted(instructions_dir.glob("*.json")):
     rules = parse_rules(data["instruction"])
     for rule in rules:
         print(f"\n[{rule.rule_id}] ({rule.rule_type}/{rule.severity}) {rule.description}")
-        print(f"  → {rule.evaluation_hint}")
+        if rule.trigger_condition:
+            print(f"  触发：{rule.trigger_condition}")
+        print(f"  期望：{rule.expected_behavior}")
+        if rule.failure_criteria:
+            for fc in rule.failure_criteria:
+                print(f"  失败：{fc}")
+        if rule.evidence_requirement:
+            print(f"  证据：{rule.evidence_requirement}")
+        if rule.checks:
+            print(f"  代码 checks：{len(rule.checks)} 个")
+
+    print_validation_report(rules, validate_rules(rules))
