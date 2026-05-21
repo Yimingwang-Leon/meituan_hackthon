@@ -121,9 +121,13 @@ class EvaluationMemoryTest(unittest.TestCase):
             self.assertIn("matched_failure_criteria", entry["judge_results"][0])
             self.assertIn("all_samples", entry["judge_results"][0])
             self.assertIn("judge_model", entry["judge_results"][0])
+            self.assertIn("trigger_confidence", entry["judge_results"][0])
+            self.assertIn("compliance_confidence", entry["judge_results"][0])
             self.assertEqual(entry["judge_results"][0]["rationale"], "")
             self.assertEqual(entry["judge_results"][0]["suggestion"], "")
             self.assertEqual(entry["judge_results"][0]["all_samples"], [])
+            self.assertIsNone(entry["judge_results"][0]["trigger_confidence"])
+            self.assertIsNone(entry["judge_results"][0]["compliance_confidence"])
             self.assertEqual(entry["judge_results"][1]["judger_result"], "fail")
             self.assertTrue(entry["judge_results"][1]["is_violation"])
 

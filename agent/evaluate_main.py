@@ -119,6 +119,8 @@ def _save_report(reports: list[EvaluationReport], output_dir: Path) -> str:
                         "matched_failure_criteria": rr.matched_failure_criteria,
                         "suggestion": rr.suggestion,
                         "confidence": rr.confidence,
+                        "trigger_confidence": rr.trigger_confidence,
+                        "compliance_confidence": rr.compliance_confidence,
                         "votes": rr.votes,
                         "evaluated_by": rr.evaluated_by,
                         "judge_model": rr.judge_model,

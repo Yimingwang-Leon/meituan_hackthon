@@ -4,6 +4,8 @@ import os
 import sys
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -27,7 +29,7 @@ from src.persona import ALL_PERSONAS
 from src.session import OutboundSession
 from src.simulation_plan import build_simulation_plan
 from src.simulator import UserSimulator
-from src.types import SessionMeta
+from src.types import SessionArchive, SessionMeta
 
 MAX_TURNS = 15
 SESSIONS_DIR = Path(__file__).parent / "sessions"
@@ -971,6 +973,8 @@ def _result_label(result: object) -> str:
         "fail": "失败",
         "not_applicable": "未触发",
         "trigger_failed": "目标未触发",
+        "triggered": "已触发",
+        "not_triggered": "未触发",
     }.get(str(result), str(result))
 
 
@@ -1006,6 +1010,42 @@ def _method_label(evaluated_by: object) -> str:
     return "程序自动检查" if str(evaluated_by) == "deterministic" else "LLM Judge"
 
 
+def _positive_int(value: object) -> int:
+    try:
+        parsed = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return parsed if parsed > 0 else 0
+
+
+def _sample_meta_html(sample: dict[str, object]) -> str:
+    phase = str(sample.get("phase", "single"))
+    index = escape(str(sample.get("sample_index", "?")))
+    result = escape(_result_label(sample.get("result", "")))
+    trigger_turn = _positive_int(sample.get("trigger_turn"))
+    response_turn = _positive_int(sample.get("response_turn"))
+
+    if phase == "trigger":
+        turn_text = f"第 {trigger_turn} 轮" if trigger_turn else "未定位轮次"
+        return (
+            f'<div class="sample-meta"><strong>触发判定 {index}：{result}</strong>'
+            f' · {turn_text}</div>'
+        )
+    if phase == "compliance":
+        turn_text = f"Agent响应第 {response_turn} 轮" if response_turn else "无明确响应轮次"
+        return (
+            f'<div class="sample-meta"><strong>合规判定 {index}：{result}</strong>'
+            f' · {turn_text}</div>'
+        )
+
+    parts = [f'<strong>第 {index} 次 Judge：{result}</strong>']
+    if trigger_turn:
+        parts.append(f"触发第 {trigger_turn} 轮")
+    if response_turn:
+        parts.append(f"Agent响应第 {response_turn} 轮")
+    return f'<div class="sample-meta">{" · ".join(parts)}</div>'
+
+
 def _samples_html(
     samples: list[dict[str, object]],
     evaluated_by: object = "llm_judge",
@@ -1015,10 +1055,6 @@ def _samples_html(
 
     items = []
     for sample in samples:
-        index = escape(str(sample.get("sample_index", "?")))
-        result = escape(_result_label(sample.get("result", "")))
-        trigger_turn = escape(str(sample.get("trigger_turn") or 0))
-        response_turn = escape(str(sample.get("response_turn") or 0))
         evidence = escape(str(sample.get("evidence", "")))
         rationale = escape(str(sample.get("rationale", "")))
         suggestion = escape(str(sample.get("suggestion", "")))
@@ -1028,8 +1064,7 @@ def _samples_html(
         )
         items.append(
             f'<div class="sample-item">'
-            f'  <div class="sample-meta"><strong>第 {index} 次 Judge：{result}</strong> · '
-            f'触发第 {trigger_turn} 轮 · Agent响应第 {response_turn} 轮</div>'
+            f'  {_sample_meta_html(sample)}'
             f'  <div><strong>证据</strong>：{evidence}</div>'
             f'  <div><strong>判定依据</strong>：{rationale}</div>'
             f'  {suggestion_html}'
@@ -1043,6 +1078,18 @@ def _samples_html(
         f'  {"".join(items)}'
         f'</details>'
     )
+
+
+def _confidence_detail_html(rule_result: object) -> str:
+    trigger_confidence = getattr(rule_result, "trigger_confidence", None)
+    if trigger_confidence is None:
+        return ""
+
+    parts = [f"触发一致率 {float(trigger_confidence):.0%}"]
+    compliance_confidence = getattr(rule_result, "compliance_confidence", None)
+    if compliance_confidence is not None:
+        parts.append(f"合规一致率 {float(compliance_confidence):.0%}")
+    return f'<div class="rule-trigger">{" · ".join(parts)}</div>'
 
 
 def _section_head(num: str, title_html: str, meta: str = "") -> None:
@@ -1336,13 +1383,20 @@ def _render_session_card(item: dict, report: EvaluationReport) -> None:
                     getattr(rr, "all_samples", []),
                     getattr(rr, "evaluated_by", "llm_judge"),
                 )
+                confidence_detail = _confidence_detail_html(rr)
                 # 触发信息条
                 trigger_info = ""
                 if rr.rule_type == "conditional" and rr.triggered is not None:
                     if rr.triggered:
+                        trigger_turn = _positive_int(rr.trigger_turn)
+                        response_turn = _positive_int(rr.response_turn)
+                        response_text = (
+                            f" · Agent 响应第 {response_turn} 轮"
+                            if response_turn else ""
+                        )
                         trigger_info = (
-                            f'<div class="rule-trigger">触发于第 {rr.trigger_turn} 轮 · '
-                            f'Agent 响应第 {rr.response_turn} 轮</div>'
+                            f'<div class="rule-trigger">触发于第 {trigger_turn} 轮'
+                            f'{response_text}</div>'
                         )
                     elif rr.is_primary:
                         trigger_info = (
@@ -1358,6 +1412,7 @@ def _render_session_card(item: dict, report: EvaluationReport) -> None:
                     f'      {_sev_pill(rr.severity)}'
                     f'      {_conf_pill(rr.confidence)}'
                     f'    </div>'
+                    f'    {confidence_detail}'
                     f'    {verdict}'
                     f'    {trigger_info}'
                     f'    {evidence}'
@@ -1371,6 +1426,163 @@ def _render_session_card(item: dict, report: EvaluationReport) -> None:
             if target_rule_id and len(report.rule_results) > len(visible_rule_results):
                 st.caption(f"当前卡片仅展示目标规则 `{target_rule_id}` 的评测结果。")
             st.markdown(f'<div class="rule-list">{"".join(rows)}</div>', unsafe_allow_html=True)
+
+
+@dataclass(frozen=True)
+class TestRunResult:
+    index: int
+    session_label: str
+    archive: SessionArchive
+    report: EvaluationReport
+    item: dict
+    timing_entry: dict
+
+
+def _run_test_case(
+    index: int,
+    total: int,
+    sub_plan,
+    case,
+    agent_spec,
+    target_rule,
+    judge_samples: int,
+) -> TestRunResult:
+    persona_label = _persona_label(case.profile_type)
+    session_label = (
+        f"{sub_plan.set_id} · {case.target_rule_id} · "
+        f"{case.case_type_label} · {persona_label}"
+    )
+    session_id = f"{sub_plan.set_id}:{case.test_id}"
+    session_timer_start = time.perf_counter()
+    print(f"\n[{index}/{total}] 开始 {session_label}", flush=True)
+
+    agent = make_outbound_agent(sub_plan.filled_instruction)
+    session_meta = SessionMeta(
+        session_id=session_id,
+        source_label="streamlit",
+        instruction_snapshot=sub_plan.filled_instruction,
+        scenario_context=sub_plan.placeholder_values,
+    )
+    outbound = OutboundSession(session_meta, agent=agent)
+    simulator = UserSimulator(
+        case,
+        agent_spec,
+        sub_plan.placeholder_values,
+        session_id=session_id,
+    )
+
+    dialogue_timer_start = time.perf_counter()
+    try:
+        print(f"  [{index}/{total}] agent.start()", flush=True)
+        agent_turn = outbound.start()
+        for turn_idx in range(MAX_TURNS):
+            if agent_turn.should_end:
+                print(f"  [{index}/{total}] agent 结束于第 {turn_idx + 1} 轮", flush=True)
+                break
+            user_turn = simulator.reply(agent_turn.reply_text)
+            if user_turn.should_end:
+                outbound.record_user(user_turn.reply_text)
+                print(f"  [{index}/{total}] user 结束于第 {turn_idx + 1} 轮", flush=True)
+                break
+            agent_turn = outbound.reply(user_turn.reply_text)
+        else:
+            print(f"  [{index}/{total}] 达到 MAX_TURNS={MAX_TURNS}", flush=True)
+    except Exception as exc:
+        raise RuntimeError(f"对话生成失败：{session_label}") from exc
+    dialogue_seconds = time.perf_counter() - dialogue_timer_start
+
+    outbound.save_archive(
+        SESSIONS_DIR,
+        "agent_end",
+        persona_type=case.profile_type,
+        case_type=case.case_type,
+        simulator_label=session_label,
+        test_case_id=case.test_id,
+        target_rule_id=case.target_rule_id,
+        target_rule_type=case.test_goal.target_rule_type,
+        target_rule_description=case.test_goal.rule_description,
+        target_rule_evaluation_hint=case.test_goal.evaluation_hint,
+        target_rule_severity=case.test_goal.severity,
+        set_id=sub_plan.set_id,
+        set_label=sub_plan.label,
+    )
+    archive = outbound.get_archive(
+        persona_type=case.profile_type,
+        case_type=case.case_type,
+        simulator_label=session_label,
+        test_case_id=case.test_id,
+        target_rule_id=case.target_rule_id,
+        target_rule_type=case.test_goal.target_rule_type,
+        target_rule_description=case.test_goal.rule_description,
+        target_rule_evaluation_hint=case.test_goal.evaluation_hint,
+        target_rule_severity=case.test_goal.severity,
+        set_id=sub_plan.set_id,
+        set_label=sub_plan.label,
+    )
+
+    print(
+        f"  [{index}/{total}] 开始评测目标规则 {case.target_rule_id} × {judge_samples} 采样",
+        flush=True,
+    )
+    eval_timer_start = time.perf_counter()
+    try:
+        report = evaluate_session(
+            archive,
+            case.profile_type,
+            rules=[target_rule],
+            n_samples=judge_samples,
+            max_workers=1,
+            set_id=sub_plan.set_id,
+            set_label=sub_plan.label,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"规则评测失败：{session_label}") from exc
+    eval_seconds = time.perf_counter() - eval_timer_start
+    session_seconds = time.perf_counter() - session_timer_start
+
+    print(
+        f"  [{index}/{total}] 评测完成，通过率 {report.score:.0%}，"
+        f"耗时 {_format_duration(session_seconds)} "
+        f"(对话 {_format_duration(dialogue_seconds)} / 评测 {_format_duration(eval_seconds)})",
+        flush=True,
+    )
+
+    item = {
+        "session_id": session_id,
+        "persona_type": case.profile_type,
+        "case_type": case.case_type,
+        "case_type_label": case.case_type_label,
+        "simulator_label": session_label,
+        "test_case_id": case.test_id,
+        "target_rule_id": case.target_rule_id,
+        "set_id": sub_plan.set_id,
+        "set_label": sub_plan.label,
+        "scenario_context": sub_plan.placeholder_values,
+        "transcript": archive.transcript,
+        "timing": {
+            "dialogue_seconds": dialogue_seconds,
+            "eval_seconds": eval_seconds,
+            "total_seconds": session_seconds,
+        },
+    }
+    timing_entry = {
+        "session_id": session_id,
+        "session_label": session_label,
+        "target_rule_id": case.target_rule_id,
+        "persona_type": case.profile_type,
+        "case_type": case.case_type,
+        "dialogue_seconds": dialogue_seconds,
+        "eval_seconds": eval_seconds,
+        "total_seconds": session_seconds,
+    }
+    return TestRunResult(
+        index=index,
+        session_label=session_label,
+        archive=archive,
+        report=report,
+        item=item,
+        timing_entry=timing_entry,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1396,13 +1608,16 @@ with st.sidebar:
     st.markdown("### 评测深度")
     judge_samples = st.select_slider(
         "LLM Judge 采样次数",
-        options=[1, 2, 3],
+        options=[1, 3],
         value=1,
-        format_func=lambda x: f"{x} 次采样" + (" · 快" if x == 1 else " · 稳" if x == 3 else ""),
-        help="每条目标规则的 LLM Judge 次数。多次判断可以看到 Judge 是否一致，但慢约 N 倍。",
+        format_func=lambda x: "1 次采样 · 快" if x == 1 else "3 次采样 · 更稳",
+        help="1 次适合快速检查；3 次可观察 Judge 分歧，避免 2 次采样平票。",
         key="slider_judge_samples",
     )
-    st.caption(f"当前每条目标规则会评判 {judge_samples} 次，并保存每次 Judge 明细。")
+    st.caption(
+        f"当前每条目标规则会评判 {judge_samples} 次，并保存每次 Judge 明细。"
+        "3 次更稳，可观察触发/合规判断分歧。"
+    )
 
     st.markdown("### 占位符取值")
     num_placeholder_sets = st.select_slider(
@@ -1418,12 +1633,24 @@ with st.sidebar:
         key="slider_placeholder_sets",
     )
 
+    st.markdown("### 并行执行")
+    parallel_workers = st.select_slider(
+        "并行测试数",
+        options=[1, 2, 4, 8, 16],
+        value=1,
+        format_func=lambda x: f"{x} 路" + (" · 顺序" if x == 1 else ""),
+        help="同时运行多少个测试对话。并行度越高越快，但也更容易触发模型接口限流或网络抖动。",
+        key="slider_parallel_workers",
+    )
+    st.caption(f"当前最多同时运行 {parallel_workers} 个测试案例。")
+
     st.markdown(
         f'<div class="side-stat">'
         f'  <div class="label">运行范围</div>'
         f'  <div class="value">单 Prompt 评测</div>'
         f'  <div class="hint">{len(selected_personas)} 个用户类型筛选，'
-        f'{judge_samples} 次 Judge 采样，最多展开 {num_placeholder_sets} 组占位符取值</div>'
+        f'{judge_samples} 次 Judge 采样，最多展开 {num_placeholder_sets} 组占位符取值，'
+        f'{parallel_workers} 路并行</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -1627,187 +1854,81 @@ if run_clicked:
     st.session_state.run_complete = False
 
     total = len(plan_case_pairs)
+    effective_parallel_workers = min(parallel_workers, total)
 
-    _section_head("03", "实时<em>执行</em>", f"{total} 个会话 · 顺序运行")
+    _section_head(
+        "03",
+        "实时<em>执行</em>",
+        f"{total} 个会话 · {effective_parallel_workers} 路并行",
+    )
 
-    progress = st.progress(0, text=f"准备运行 {total} 个会话...")
+    progress = st.progress(
+        0,
+        text=f"准备运行 {total} 个会话 · 并行度 {effective_parallel_workers}",
+    )
     live = st.container()
 
     done = 0
-    for sub_plan, case in plan_case_pairs:
-        persona_label = _persona_label(case.profile_type)
-        session_label = (
-            f"{sub_plan.set_id} · {case.target_rule_id} · {case.case_type_label} · {persona_label}"
-        )
-        session_id = f"{sub_plan.set_id}:{case.test_id}"
-        target_rule = rules_by_id[case.target_rule_id]
-        session_timer_start = time.perf_counter()
-        print(f"\n[{done + 1}/{total}] 开始 {session_label}", flush=True)
-        progress.progress(
-            done / total,
-            text=f"对话生成中 · {session_label}  ({done + 1}/{total})",
-        )
+    executor = ThreadPoolExecutor(max_workers=effective_parallel_workers)
+    executor_closed = False
+    futures = []
+    try:
+        for index, (sub_plan, case) in enumerate(plan_case_pairs, start=1):
+            target_rule = rules_by_id[case.target_rule_id]
+            futures.append(
+                executor.submit(
+                    _run_test_case,
+                    index,
+                    total,
+                    sub_plan,
+                    case,
+                    agent_spec,
+                    target_rule,
+                    judge_samples,
+                )
+            )
 
-        agent = make_outbound_agent(sub_plan.filled_instruction)
-        session_meta = SessionMeta(
-            session_id=session_id,
-            source_label="streamlit",
-            instruction_snapshot=sub_plan.filled_instruction,
-            scenario_context=sub_plan.placeholder_values,
-        )
-        outbound = OutboundSession(session_meta, agent=agent)
-        simulator = UserSimulator(
-            case,
-            agent_spec,
-            sub_plan.placeholder_values,
-            session_id=session_id,
-        )
-        dialogue_timer_start = time.perf_counter()
-        try:
-            print("  agent.start()", flush=True)
-            agent_turn = outbound.start()
-            for turn_idx in range(MAX_TURNS):
-                if agent_turn.should_end:
-                    print(f"  agent 结束于第 {turn_idx + 1} 轮", flush=True)
-                    break
-                user_turn = simulator.reply(agent_turn.reply_text)
-                if user_turn.should_end:
-                    outbound.record_user(user_turn.reply_text)
-                    print(f"  user 结束于第 {turn_idx + 1} 轮", flush=True)
-                    break
-                agent_turn = outbound.reply(user_turn.reply_text)
-            else:
-                print(f"  达到 MAX_TURNS={MAX_TURNS}", flush=True)
-        except Exception as exc:
-            elapsed = time.perf_counter() - session_timer_start
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+            except Exception as exc:
+                for pending in futures:
+                    pending.cancel()
+                executor.shutdown(wait=False, cancel_futures=True)
+                executor_closed = True
+                progress.progress(
+                    done / total,
+                    text=f"并行执行失败 · 已完成 {done}/{total}",
+                )
+                st.error("测试执行失败，已取消尚未开始的任务。")
+                st.error(f"{type(exc).__name__}: {exc}")
+                root = exc.__cause__
+                if root is not None:
+                    st.error(f"底层错误：{type(root).__name__}: {root}")
+                st.info(
+                    "并行度较高时更容易触发模型接口限流、连接抖动或结构化输出异常；"
+                    "可以降低并行度后重新运行。"
+                )
+                st.stop()
+
+            append_evaluation_memory(result.archive, result.report, MEMORY_DIR)
+            st.session_state.run_timing["sessions"].append(result.timing_entry)
+            st.session_state.reports.append(result.report)
+            st.session_state.transcripts.append(result.item)
+            with live:
+                _render_session_card(result.item, result.report)
+
+            done += 1
             progress.progress(
                 done / total,
-                text=f"对话生成失败 · {session_label}  ({done + 1}/{total})",
+                text=(
+                    f"已完成 · {result.session_label}  ({done}/{total}) · "
+                    f"并行度 {effective_parallel_workers}"
+                ),
             )
-            st.error(f"对话生成失败：{session_label}")
-            st.error(f"{type(exc).__name__}: {exc}")
-            st.info(f"当前 session 已耗时：{_format_duration(elapsed)}")
-            st.info(
-                "这通常是模型接口、网络连接抖动或结构化输出异常。系统已经自动重试；"
-                "仍失败时，可以直接重新开始本轮评测。"
-            )
-            st.stop()
-        dialogue_seconds = time.perf_counter() - dialogue_timer_start
-
-        print(
-            f"  开始评测目标规则 {case.target_rule_id} × {judge_samples} 采样",
-            flush=True,
-        )
-        progress.progress(
-            done / total,
-            text=f"规则评测中 · {session_label}  ({done + 1}/{total})",
-        )
-        outbound.save_archive(
-            SESSIONS_DIR,
-            "agent_end",
-            persona_type=case.profile_type,
-            case_type=case.case_type,
-            simulator_label=session_label,
-            test_case_id=case.test_id,
-            target_rule_id=case.target_rule_id,
-            target_rule_type=case.test_goal.target_rule_type,
-            target_rule_description=case.test_goal.rule_description,
-            target_rule_evaluation_hint=case.test_goal.evaluation_hint,
-            target_rule_severity=case.test_goal.severity,
-            set_id=sub_plan.set_id,
-            set_label=sub_plan.label,
-        )
-        archive = outbound.get_archive(
-            persona_type=case.profile_type,
-            case_type=case.case_type,
-            simulator_label=session_label,
-            test_case_id=case.test_id,
-            target_rule_id=case.target_rule_id,
-            target_rule_type=case.test_goal.target_rule_type,
-            target_rule_description=case.test_goal.rule_description,
-            target_rule_evaluation_hint=case.test_goal.evaluation_hint,
-            target_rule_severity=case.test_goal.severity,
-            set_id=sub_plan.set_id,
-            set_label=sub_plan.label,
-        )
-        eval_timer_start = time.perf_counter()
-        try:
-            report = evaluate_session(
-                archive,
-                case.profile_type,
-                rules=[target_rule],
-                n_samples=judge_samples,
-                max_workers=8,
-                set_id=sub_plan.set_id,
-                set_label=sub_plan.label,
-            )
-        except Exception as exc:
-            elapsed = time.perf_counter() - session_timer_start
-            progress.progress(
-                done / total,
-                text=f"规则评测失败 · {session_label}  ({done + 1}/{total})",
-            )
-            st.error(f"规则评测失败：{session_label}")
-            st.error(f"{type(exc).__name__}: {exc}")
-            st.info(f"当前 session 已耗时：{_format_duration(elapsed)}")
-            st.info(
-                "如果失败点是 LLM Judge，通常是模型接口、网络连接抖动或结构化输出异常；"
-                "系统已经自动重试，仍失败时可以重新开始本轮评测。"
-            )
-            st.stop()
-        eval_seconds = time.perf_counter() - eval_timer_start
-        session_seconds = time.perf_counter() - session_timer_start
-        append_evaluation_memory(archive, report, MEMORY_DIR)
-        print(
-            f"  评测完成，通过率 {report.score:.0%}，"
-            f"耗时 {_format_duration(session_seconds)} "
-            f"(对话 {_format_duration(dialogue_seconds)} / 评测 {_format_duration(eval_seconds)})",
-            flush=True,
-        )
-        item = {
-            "session_id": session_id,
-            "persona_type": case.profile_type,
-            "case_type": case.case_type,
-            "case_type_label": case.case_type_label,
-            "simulator_label": session_label,
-            "test_case_id": case.test_id,
-            "target_rule_id": case.target_rule_id,
-            "set_id": sub_plan.set_id,
-            "set_label": sub_plan.label,
-            "scenario_context": sub_plan.placeholder_values,
-            "transcript": archive.transcript,
-            "timing": {
-                "dialogue_seconds": dialogue_seconds,
-                "eval_seconds": eval_seconds,
-                "total_seconds": session_seconds,
-            },
-        }
-        st.session_state.run_timing["sessions"].append(
-            {
-                "session_id": session_id,
-                "session_label": session_label,
-                "target_rule_id": case.target_rule_id,
-                "persona_type": case.profile_type,
-                "case_type": case.case_type,
-                "dialogue_seconds": dialogue_seconds,
-                "eval_seconds": eval_seconds,
-                "total_seconds": session_seconds,
-            }
-        )
-
-        st.session_state.reports.append(report)
-        st.session_state.transcripts.append(item)
-        with live:
-            _render_session_card(item, report)
-
-        done += 1
-        progress.progress(
-            done / total,
-            text=(
-                f"已完成 · {session_label}  ({done}/{total}) · "
-                f"{_format_duration(session_seconds)}"
-            ),
-        )
+    finally:
+        if not executor_closed:
+            executor.shutdown(wait=True, cancel_futures=True)
 
     progress.progress(1.0, text="评测完成 · 100%")
     st.session_state.run_timing["finished_at"] = _now_text()

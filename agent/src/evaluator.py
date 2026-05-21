@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import statistics
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -28,6 +30,8 @@ class RuleResult:
     matched_failure_criteria: list[str] = field(default_factory=list)
     suggestion: str = ""
     confidence: float = 1.0
+    trigger_confidence: float | None = None     # 两步评测：触发判定的一致率
+    compliance_confidence: float | None = None  # 两步评测：合规判定的一致率（未触发时为 None）
     votes: dict[str, int] = field(default_factory=dict)
     all_samples: list[dict[str, object]] = field(default_factory=list)
     judge_model: str = ""
@@ -213,6 +217,389 @@ _judge_agent = Agent(
 )
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# Conditional 两步评测：TriggerJudge + ComplianceJudge
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class TriggerJudgeOutput(BaseModel):
+    triggered: bool = Field(
+        description=(
+            "对话中是否出现了规则的触发条件。"
+            "只看用户侧/对话推进，不评估 Agent 响应。"
+            "标准：用户表达已足以让 Agent 合理进入该规则对应处理分支才算 true；"
+            "纯背景铺垫、无关情绪、未形成行动含义的不算触发。"
+        )
+    )
+    trigger_turn: int = Field(
+        description=(
+            "触发条件出现在第几轮（1-based）；triggered=false 时填 0。"
+            "应指向「触发被识别出来的那一轮」，不要倒推到此前几轮的铺垫。"
+        )
+    )
+    evidence: str = Field(
+        description="必须引用该轮原话的关键片段，不超过 50 字。例：第3轮用户说「我现在不想买了」"
+    )
+    rationale: str = Field(
+        default="",
+        description=(
+            "为什么这构成触发：对照规则 trigger_condition 的哪个关键要素，简要说明。"
+            "triggered=false 时说明为什么不构成触发。"
+        ),
+    )
+
+
+class ComplianceJudgeOutput(BaseModel):
+    compliant: bool = Field(
+        description="在已确认触发的前提下，Agent 在触发轮之后的响应是否符合 expected_behavior。"
+    )
+    response_turn: int = Field(
+        description="Agent 给出关键响应在第几轮（1-based）；无明确响应填 0。"
+    )
+    evidence: str = Field(
+        description="必须引用 Agent 响应轮原话片段，不超过 50 字。"
+    )
+    rationale: str = Field(
+        default="",
+        description=(
+            "判定依据：引用对话事实 + 对照 expected_behavior / failure_criteria + 结论。"
+            "不要写隐藏推理过程，要给人复核。"
+        ),
+    )
+    matched_failure_criteria: list[str] = Field(
+        default_factory=list,
+        description=(
+            "compliant=false 时列出命中的 failure_criteria 原文，必须从给定列表挑选；"
+            "compliant=true 时填空列表。"
+        ),
+    )
+    suggestion: str = Field(
+        default="",
+        description=(
+            "compliant=false 时填一句可执行修复建议（例：「在第 X 轮加一句…」），不超过 50 字；"
+            "compliant=true 时填空字符串。"
+        ),
+    )
+
+
+_trigger_judge_agent = Agent(
+    name="TriggerJudge",
+    instructions=(
+        "你是对话规则触发判定专家。你只判一件事：规则的「触发条件」是否在对话中出现过。\n\n"
+        "判定原则：\n"
+        "1. 只看用户的话和对话进展。Agent 后续做对做错与你无关。\n"
+        "2. 触发条件描述的是「什么样的用户行为/对话状态构成了规则适用前提」，不是 Agent 该做什么。\n"
+        "3. 判定门槛：用户表达已经足以让 Agent 合理进入该规则对应处理分支，才算 triggered=true。"
+        "纯背景铺垫、无关情绪、未形成行动含义的不算触发（例如「我有点忙」不算「明确拒绝」的触发）。\n"
+        "4. 触发条件出现 ≠ 表达明确。即使表达含糊，只要语义上已经构成行动含义，仍算 triggered=true。\n"
+        "5. 严格引用原话作为 evidence，不要转述。\n"
+        "6. trigger_turn 必须指向「触发被识别出来的那一轮」，不要倒推到此前几轮的铺垫。\n\n"
+        "只根据提供的对话记录判断，不要推测对话之外的信息。"
+    ),
+    model="deepseek-v4-pro",
+    output_type=TriggerJudgeOutput,
+)
+
+
+_compliance_judge_agent = Agent(
+    name="ComplianceJudge",
+    instructions=(
+        "你是对话合规判定专家。你只判一件事：在「触发已经在第 X 轮发生」的前提下，"
+        "Agent 此后的响应是否符合 expected_behavior。\n\n"
+        "判定原则：\n"
+        "1. 触发判定已经由上一步完成，你不要重新判定触发。\n"
+        "2. 关注点在「trigger_turn 及其之后」的 Agent 发言，trigger_turn 之前的内容只作背景。\n"
+        "3. 「符合 expected_behavior」要看实质动作，不是字面话术。"
+        "例如规则要求「询问拒收原因」，Agent 说「方便问下是什么原因吗」算符合，说「那帮你取消」不算。\n"
+        "4. compliant=false 时，matched_failure_criteria 必须从给定的 failure_criteria 列表里"
+        "挑出实际命中的那条原文，不要自创新条目。\n"
+        "5. suggestion 写一句可执行修复（例：「在第 X 轮加一句…」），不要泛泛而谈。\n\n"
+        "只根据提供的对话记录判断，不要推测对话之外的信息。"
+    ),
+    model="deepseek-v4-pro",
+    output_type=ComplianceJudgeOutput,
+)
+
+
+def _resolve_trigger_turn(turns: list[int]) -> int:
+    """从 triggered=true 样本的 trigger_turn 里挑一个。
+
+    优先严格多数（> 半数）；无多数取中位数（偶数样本取 low median）。
+    传入空列表返回 0。
+    """
+    valid = [t for t in turns if t > 0]
+    if not valid:
+        return 0
+    counter = Counter(valid)
+    top_value, top_count = counter.most_common(1)[0]
+    if top_count * 2 > len(valid):
+        return top_value
+    return statistics.median_low(valid)
+
+
+def _build_trigger_prompt(rule: Rule, transcript_text: str) -> str:
+    return (
+        f"【对话记录】\n{transcript_text}\n\n"
+        f"【你要判定的规则】\n"
+        f"规则ID：{rule.rule_id}\n"
+        f"规则类型：conditional\n"
+        f"规则描述：{rule.description}\n"
+        f"触发条件：{rule.trigger_condition or rule.description}\n"
+        f"期望行为（仅作背景理解，本步不评估）：{rule.expected_behavior}\n\n"
+        f"你只判定：上面的触发条件在对话里有没有出现。\n"
+        f"- triggered=true 时给出 trigger_turn 和原话 evidence\n"
+        f"- triggered=false 时 trigger_turn=0\n"
+    )
+
+
+def _build_compliance_prompt(
+    rule: Rule,
+    transcript_text: str,
+    trigger_turn: int,
+    trigger_evidence: str,
+) -> str:
+    failure_lines = (
+        "\n".join(f"  - {c}" for c in rule.failure_criteria)
+        if rule.failure_criteria else "  - （未列出）"
+    )
+    return (
+        f"【对话记录】\n{transcript_text}\n\n"
+        f"【触发已确认】\n"
+        f"- 规则ID：{rule.rule_id}\n"
+        f"- 规则描述：{rule.description}\n"
+        f"- 触发条件：{rule.trigger_condition or rule.description}\n"
+        f"- 触发出现在：第 {trigger_turn} 轮\n"
+        f"- 触发证据：{trigger_evidence}\n\n"
+        f"【你要判定的合规标准】\n"
+        f"- 期望行为：{rule.expected_behavior}\n"
+        f"- 失败标准（compliant=false 时必须命中至少一条）：\n{failure_lines}\n"
+        f"- 证据要求：{rule.evidence_requirement or '引用具体 Agent 响应轮次原话'}\n\n"
+        f"请只评估 Agent 在第 {trigger_turn} 轮之后的响应是否符合期望行为。"
+    )
+
+
+def _run_trigger_judge_once(prompt: str, rule_id: str) -> TriggerJudgeOutput:
+    result = Runner.run_sync(_trigger_judge_agent, prompt)
+    output = result.final_output
+    if not isinstance(output, TriggerJudgeOutput):
+        raise RuntimeError(f"规则 {rule_id} TriggerJudge 返回了意外结果类型")
+    return output
+
+
+def _run_compliance_judge_once(prompt: str, rule_id: str) -> ComplianceJudgeOutput:
+    result = Runner.run_sync(_compliance_judge_agent, prompt)
+    output = result.final_output
+    if not isinstance(output, ComplianceJudgeOutput):
+        raise RuntimeError(f"规则 {rule_id} ComplianceJudge 返回了意外结果类型")
+    return output
+
+
+def _build_trigger_sample(
+    output: TriggerJudgeOutput,
+    sample_index: int,
+) -> dict[str, object]:
+    return {
+        "phase": "trigger",
+        "sample_index": sample_index,
+        "result": "triggered" if output.triggered else "not_triggered",
+        "triggered": output.triggered,
+        "trigger_turn": output.trigger_turn,
+        "response_turn": 0,
+        "compliant": None,
+        "evidence": output.evidence,
+        "rationale": output.rationale,
+        "matched_failure_criteria": [],
+        "suggestion": "",
+    }
+
+
+def _build_compliance_sample(
+    output: ComplianceJudgeOutput,
+    sample_index: int,
+    final_trigger_turn: int,
+) -> dict[str, object]:
+    return {
+        "phase": "compliance",
+        "sample_index": sample_index,
+        "result": "pass" if output.compliant else "fail",
+        "triggered": True,
+        "trigger_turn": final_trigger_turn,
+        "response_turn": output.response_turn,
+        "compliant": output.compliant,
+        "evidence": output.evidence,
+        "rationale": output.rationale,
+        "matched_failure_criteria": (
+            list(output.matched_failure_criteria) if not output.compliant else []
+        ),
+        "suggestion": output.suggestion.strip() if not output.compliant else "",
+    }
+
+
+def _normalize_trigger_output(output: TriggerJudgeOutput) -> TriggerJudgeOutput:
+    """Treat impossible triggered=true/turn<=0 outputs as not triggered."""
+    if output.triggered and output.trigger_turn <= 0:
+        return TriggerJudgeOutput(
+            triggered=False,
+            trigger_turn=0,
+            evidence=output.evidence,
+            rationale=output.rationale,
+        )
+    return output
+
+
+def _evaluate_conditional_two_step(
+    rule: Rule,
+    transcript_text: str,
+    n_samples: int,
+    is_primary: bool,
+    trigger_outputs: list[TriggerJudgeOutput] | None = None,
+    compliance_outputs_provider: (
+        Callable[[int, str], list[ComplianceJudgeOutput]] | None
+    ) = None,
+) -> RuleResult:
+    """两步评测 conditional 规则。
+
+    trigger_outputs / compliance_outputs_provider 仅用于测试注入。
+    生产路径下不会传，函数内部自行调用两个 judge agent。
+    """
+    if n_samples <= 0:
+        raise ValueError("n_samples must be greater than 0")
+
+    trigger_prompt = _build_trigger_prompt(rule, transcript_text)
+    if trigger_outputs is None:
+        trigger_outputs = [
+            _run_trigger_judge_once(trigger_prompt, rule.rule_id)
+            for _ in range(n_samples)
+        ]
+    trigger_outputs = [
+        _normalize_trigger_output(output)
+        for output in trigger_outputs
+    ]
+    sample_count = len(trigger_outputs)
+    if sample_count == 0:
+        raise ValueError("trigger_outputs must contain at least one sample")
+
+    trigger_counter: Counter[bool] = Counter(o.triggered for o in trigger_outputs)
+    triggered_final, top_trigger_votes = trigger_counter.most_common(1)[0]
+    trigger_confidence = top_trigger_votes / sample_count
+    trigger_samples = [
+        _build_trigger_sample(output, idx + 1)
+        for idx, output in enumerate(trigger_outputs)
+    ]
+
+    # 未触发：不进 Step 2
+    if not triggered_final:
+        result_label: RuleResultLiteral = (
+            "trigger_failed" if is_primary else "not_applicable"
+        )
+        rep_trigger = next(o for o in trigger_outputs if not o.triggered)
+        return RuleResult(
+            rule_id=rule.rule_id,
+            rule_type=rule.rule_type,
+            description=rule.description,
+            severity=rule.severity,
+            result=result_label,
+            evidence=rep_trigger.evidence,
+            rationale=rep_trigger.rationale,
+            matched_failure_criteria=[],
+            suggestion="",
+            confidence=trigger_confidence,
+            trigger_confidence=trigger_confidence,
+            compliance_confidence=None,
+            votes={
+                "triggered": trigger_counter.get(True, 0),
+                "not_triggered": trigger_counter.get(False, 0),
+            },
+            all_samples=trigger_samples,
+            judge_model=_trigger_judge_agent.model,
+            judge_prompt=trigger_prompt,
+            triggered=False,
+            trigger_turn=None,
+            response_turn=None,
+            is_primary=is_primary,
+            evaluated_by="llm_judge",
+        )
+
+    # 触发了：解析 trigger_turn 并跑 compliance 阶段
+    triggered_samples = [o for o in trigger_outputs if o.triggered]
+    final_trigger_turn = _resolve_trigger_turn(
+        [o.trigger_turn for o in triggered_samples]
+    )
+    trigger_evidence_for_compliance = next(
+        (
+            o.evidence
+            for o in triggered_samples
+            if o.trigger_turn == final_trigger_turn
+        ),
+        triggered_samples[0].evidence,
+    )
+
+    compliance_prompt = _build_compliance_prompt(
+        rule,
+        transcript_text,
+        final_trigger_turn,
+        trigger_evidence_for_compliance,
+    )
+    if compliance_outputs_provider is not None:
+        compliance_outputs = compliance_outputs_provider(
+            final_trigger_turn, trigger_evidence_for_compliance
+        )
+    else:
+        compliance_outputs = [
+            _run_compliance_judge_once(compliance_prompt, rule.rule_id)
+            for _ in range(n_samples)
+        ]
+
+    compliance_counter: Counter[bool] = Counter(o.compliant for o in compliance_outputs)
+    compliant_final, top_compliance_votes = compliance_counter.most_common(1)[0]
+    compliance_confidence = top_compliance_votes / len(compliance_outputs)
+
+    compliance_samples = [
+        _build_compliance_sample(output, idx + 1, final_trigger_turn)
+        for idx, output in enumerate(compliance_outputs)
+    ]
+
+    rep_compliance = next(
+        o for o in compliance_outputs if o.compliant == compliant_final
+    )
+    result_label = "pass" if compliant_final else "fail"
+    overall_confidence = trigger_confidence * compliance_confidence
+
+    return RuleResult(
+        rule_id=rule.rule_id,
+        rule_type=rule.rule_type,
+        description=rule.description,
+        severity=rule.severity,
+        result=result_label,
+        evidence=rep_compliance.evidence,
+        rationale=rep_compliance.rationale,
+        matched_failure_criteria=(
+            list(rep_compliance.matched_failure_criteria)
+            if result_label == "fail" else []
+        ),
+        suggestion=(
+            rep_compliance.suggestion.strip() if result_label == "fail" else ""
+        ),
+        confidence=overall_confidence,
+        trigger_confidence=trigger_confidence,
+        compliance_confidence=compliance_confidence,
+        votes={
+            "pass": compliance_counter.get(True, 0),
+            "fail": compliance_counter.get(False, 0),
+        },
+        all_samples=trigger_samples + compliance_samples,
+        judge_model=_compliance_judge_agent.model,
+        judge_prompt=trigger_prompt + "\n\n---\n\n" + compliance_prompt,
+        triggered=True,
+        trigger_turn=final_trigger_turn,
+        response_turn=(
+            rep_compliance.response_turn if rep_compliance.response_turn > 0 else None
+        ),
+        is_primary=is_primary,
+        evaluated_by="llm_judge",
+    )
+
+
 def _format_transcript(archive: SessionArchive) -> str:
     lines = []
     for i, entry in enumerate(archive.transcript, start=1):
@@ -337,6 +724,7 @@ def _build_sample(
 ) -> dict[str, object]:
     result = _classify_judge(rule, output, is_primary)
     return {
+        "phase": "single",
         "sample_index": sample_index,
         "result": result,
         "triggered": output.triggered,
@@ -382,20 +770,43 @@ def evaluate_session(
     set_id: str | None = None,
     set_label: str | None = None,
 ) -> EvaluationReport:
+    if n_samples <= 0:
+        raise ValueError("n_samples must be greater than 0")
+
     transcript_text = _format_transcript(archive)
     active_rules = rules if rules is not None else RULES
 
     target_rule_id = archive.target_rule_id
 
-    # 分流：有 checks 的规则走代码，没有的走 LLM
+    # 三路分流：
+    #   - 有 checks 的规则走代码
+    #   - conditional 规则走 trigger/compliance 两步 LLM
+    #   - required / forbidden 规则走单步 LLM
     deterministic_rules = [r for r in active_rules if r.checks]
-    llm_rules = [r for r in active_rules if not r.checks]
-    prompts = {rule.rule_id: _build_rule_prompt(rule, transcript_text) for rule in llm_rules}
+    conditional_llm_rules = [
+        r for r in active_rules if not r.checks and r.rule_type == "conditional"
+    ]
+    single_step_llm_rules = [
+        r for r in active_rules if not r.checks and r.rule_type != "conditional"
+    ]
 
-    total_llm_calls = len(llm_rules) * n_samples
+    single_step_prompts = {
+        rule.rule_id: _build_rule_prompt(rule, transcript_text)
+        for rule in single_step_llm_rules
+    }
+
+    # 进度估算：conditional 至少 N 次 trigger 调用；触发了再加 N 次 compliance（上限 2N）
+    min_llm_calls = (
+        len(single_step_llm_rules) * n_samples
+        + len(conditional_llm_rules) * n_samples
+    )
+    max_llm_calls = min_llm_calls + len(conditional_llm_rules) * n_samples
     print(
         f"    评测 {len(active_rules)} 条规则："
-        f"代码 {len(deterministic_rules)} 条 + LLM {len(llm_rules)} 条 × {n_samples} 采样",
+        f"代码 {len(deterministic_rules)} 条 + "
+        f"LLM 单步 {len(single_step_llm_rules)} 条 + "
+        f"LLM 两步 {len(conditional_llm_rules)} 条 × {n_samples} 采样"
+        f"（预计 {min_llm_calls}-{max_llm_calls} 次 LLM 调用）",
         flush=True,
     )
 
@@ -418,9 +829,30 @@ def evaluate_session(
                     judge_prompt=_build_deterministic_audit_prompt(rule),
                 )
             )
+        elif rule.rule_type == "conditional":
+            # 两步 LLM 评测：先 trigger，触发则 compliance
+            result = _evaluate_conditional_two_step(
+                rule,
+                transcript_text,
+                n_samples=n_samples,
+                is_primary=is_primary,
+            )
+            rule_results.append(result)
+            phase_count = len(
+                {
+                    sample.get("phase")
+                    for sample in result.all_samples
+                    if isinstance(sample, dict)
+                }
+            )
+            llm_done += n_samples * max(1, phase_count)
+            print(
+                f"    LLM judge 进度 {llm_done}/{max_llm_calls}（两步 · {rule.rule_id}）",
+                flush=True,
+            )
         else:
-            # LLM judge × N 采样
-            prompt = prompts[rule.rule_id]
+            # 单步 LLM judge × N 采样（required / forbidden）
+            prompt = single_step_prompts[rule.rule_id]
             outputs = [
                 _run_judge_once(prompt, rule.rule_id)
                 for _ in range(n_samples)
@@ -436,7 +868,10 @@ def evaluate_session(
                 )
             )
             llm_done += n_samples
-            print(f"    LLM judge 进度 {llm_done}/{total_llm_calls}", flush=True)
+            print(
+                f"    LLM judge 进度 {llm_done}/{max_llm_calls}（单步 · {rule.rule_id}）",
+                flush=True,
+            )
 
     # 打分：pass / fail 进分母，其他不进
     scored = [r for r in rule_results if r.result in ("pass", "fail")]
