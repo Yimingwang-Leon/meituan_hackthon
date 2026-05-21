@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .deterministic_checks import DeterministicCheck
 from .rules import Rule, RuleType, Severity
@@ -39,11 +39,19 @@ class ParsedRule(BaseModel):
         description="judge 应该引用哪类证据，不超过一句话。"
     )
     checks: list[DeterministicCheck] = Field(
+        default_factory=list,
         description=(
             "代码可检查的部分。若描述含确定性条件（字数、关键词、PII、开场词等），列出对应 checks；"
             "无法代码化则填空列表 []。"
         )
     )
+
+    @field_validator("checks", mode="before")
+    @classmethod
+    def _default_missing_checks(cls, value):
+        if value is None:
+            return []
+        return value
 
 
 class ParsedRuleList(BaseModel):

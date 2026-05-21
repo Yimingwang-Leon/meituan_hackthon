@@ -1,0 +1,200 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="930" viewBox="0 0 1480 930" role="img" aria-labelledby="title desc">
+  <title id="title">任务型对话 Agent 自动评测系统架构图</title>
+  <desc id="desc">该图展示系统从业务 instruction 输入，到规则解析、可选占位符处理、测试计划生成、对话执行、评估和报告持久化的完整链路。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+    <style>
+      .canvas { fill: #ffffff; }
+      .title { font: 700 30px Arial, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 15px Arial, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #475569; }
+      .group { fill: #f8fafc; stroke: #94a3b8; stroke-width: 1.4; rx: 10; }
+      .group-title { font: 700 18px Arial, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #1e293b; }
+      .box { fill: #ffffff; stroke: #334155; stroke-width: 1.3; rx: 8; }
+      .box-blue { fill: #eff6ff; stroke: #2563eb; stroke-width: 1.4; rx: 8; }
+      .box-green { fill: #ecfdf5; stroke: #059669; stroke-width: 1.4; rx: 8; }
+      .box-amber { fill: #fffbeb; stroke: #d97706; stroke-width: 1.4; rx: 8; }
+      .box-purple { fill: #f5f3ff; stroke: #7c3aed; stroke-width: 1.4; rx: 8; }
+      .box-gray { fill: #f1f5f9; stroke: #475569; stroke-width: 1.2; rx: 8; }
+      .diamond { fill: #ffffff; stroke: #2563eb; stroke-width: 1.5; }
+      .module { font: 700 15px Arial, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #0f172a; }
+      .file { font: 400 12px Arial, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #475569; }
+      .small { font: 400 12px Arial, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #334155; }
+      .label { font: 700 12px Arial, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #1d4ed8; }
+      .line { stroke: #334155; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .line-blue { stroke: #2563eb; stroke-width: 1.8; fill: none; marker-end: url(#arrow-blue); }
+      .line-dash { stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 6 5; fill: none; marker-end: url(#arrow); }
+      .bidirectional { stroke: #334155; stroke-width: 1.6; fill: none; marker-start: url(#arrow); marker-end: url(#arrow); }
+      .note { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.1; rx: 8; }
+    </style>
+  </defs>
+
+  <rect class="canvas" width="1480" height="930"/>
+  <text x="740" y="42" text-anchor="middle" class="title">任务型对话 Agent 自动评测系统架构</text>
+
+  <!-- Input layer -->
+  <rect x="40" y="115" width="205" height="255" class="group"/>
+  <text x="142.5" y="148" text-anchor="middle" class="group-title">输入层</text>
+  <rect x="68" y="185" width="150" height="95" class="box-blue"/>
+  <text x="143" y="222" text-anchor="middle" class="module">业务 Prompt</text>
+  <text x="143" y="246" text-anchor="middle" class="file">Instruction</text>
+  <text x="143" y="316" text-anchor="middle" class="small">仅输入原始任务说明</text>
+  <text x="143" y="336" text-anchor="middle" class="small">不预设人工规则集</text>
+
+  <!-- Planning layer -->
+  <rect x="285" y="95" width="505" height="745" class="group"/>
+  <text x="537.5" y="128" text-anchor="middle" class="group-title">测试计划生成层</text>
+
+  <rect x="330" y="160" width="185" height="66" class="box"/>
+  <text x="422.5" y="187" text-anchor="middle" class="module">规则解析</text>
+  <text x="422.5" y="208" text-anchor="middle" class="file">rule_parser.py</text>
+
+  <rect x="560" y="160" width="180" height="66" class="box-gray"/>
+  <text x="650" y="186" text-anchor="middle" class="module">RuleSet</text>
+  <text x="650" y="207" text-anchor="middle" class="file">required / conditional / forbidden</text>
+
+  <rect x="330" y="255" width="185" height="66" class="box"/>
+  <text x="422.5" y="282" text-anchor="middle" class="module">规则校验 / 修复</text>
+  <text x="422.5" y="303" text-anchor="middle" class="file">rule_validation.py</text>
+
+  <rect x="560" y="255" width="180" height="66" class="box-gray"/>
+  <text x="650" y="282" text-anchor="middle" class="module">质量检查</text>
+  <text x="650" y="303" text-anchor="middle" class="file">warning / error / auto-fix</text>
+
+  <rect x="330" y="350" width="185" height="66" class="box"/>
+  <text x="422.5" y="377" text-anchor="middle" class="module">Agent 规格归纳</text>
+  <text x="422.5" y="398" text-anchor="middle" class="file">agent_spec.py</text>
+
+  <rect x="560" y="350" width="180" height="66" class="box-gray"/>
+  <text x="650" y="377" text-anchor="middle" class="module">AgentSpec</text>
+  <text x="650" y="398" text-anchor="middle" class="file">职责 / 对象 / 边界</text>
+
+  <polygon points="537,455 648,515 537,575 426,515" class="diamond"/>
+  <text x="537" y="505" text-anchor="middle" class="module">占位符检查</text>
+  <text x="537" y="529" text-anchor="middle" class="file">是否需要填值展开？</text>
+
+  <rect x="320" y="620" width="205" height="74" class="box-amber"/>
+  <text x="422.5" y="649" text-anchor="middle" class="module">占位符填值</text>
+  <text x="422.5" y="670" text-anchor="middle" class="file">placeholders.py</text>
+  <text x="422.5" y="688" text-anchor="middle" class="file">PlaceholderSet / filled_instruction</text>
+
+  <rect x="555" y="620" width="205" height="74" class="box-amber"/>
+  <text x="657.5" y="649" text-anchor="middle" class="module">默认展开</text>
+  <text x="657.5" y="670" text-anchor="middle" class="file">保留原始 instruction</text>
+  <text x="657.5" y="688" text-anchor="middle" class="file">Default SubPlan</text>
+
+  <rect x="405" y="730" width="260" height="72" class="box-green"/>
+  <text x="535" y="759" text-anchor="middle" class="module">测试场景生成</text>
+  <text x="535" y="780" text-anchor="middle" class="file">test_case_generator.py</text>
+  <text x="535" y="798" text-anchor="middle" class="file">SimulationCase</text>
+
+  <!-- Planning arrows -->
+  <path d="M 218 232 L 330 193" class="line"/>
+  <path d="M 515 193 L 560 193" class="line"/>
+  <path d="M 422.5 226 L 422.5 255" class="line"/>
+  <path d="M 515 288 L 560 288" class="line"/>
+  <path d="M 422.5 321 L 422.5 350" class="line"/>
+  <path d="M 515 383 L 560 383" class="line"/>
+  <path d="M 422.5 416 C 422.5 442 462 454 498 470" class="line"/>
+  <path d="M 537 575 L 472 620" class="line-blue"/>
+  <text x="455" y="596" text-anchor="middle" class="label">有占位符</text>
+  <path d="M 648 515 C 720 530 704 585 657 620" class="line-blue"/>
+  <text x="704" y="558" text-anchor="middle" class="label">无占位符</text>
+  <path d="M 422.5 694 C 422.5 715 453 718 489 730" class="line"/>
+  <path d="M 657.5 694 C 657.5 715 617 718 582 730" class="line"/>
+
+  <!-- Execution layer -->
+  <rect x="835" y="115" width="285" height="440" class="group"/>
+  <text x="977.5" y="148" text-anchor="middle" class="group-title">对话执行层</text>
+
+  <rect x="872" y="180" width="210" height="62" class="box-green"/>
+  <text x="977" y="205" text-anchor="middle" class="module">运行单元</text>
+  <text x="977" y="226" text-anchor="middle" class="file">SubPlan × SimulationCase</text>
+
+  <rect x="872" y="280" width="210" height="66" class="box-blue"/>
+  <text x="977" y="307" text-anchor="middle" class="module">被测 Agent</text>
+  <text x="977" y="328" text-anchor="middle" class="file">agent.py / filled_instruction</text>
+
+  <rect x="872" y="385" width="210" height="66" class="box-blue"/>
+  <text x="977" y="412" text-anchor="middle" class="module">用户模拟器</text>
+  <text x="977" y="433" text-anchor="middle" class="file">simulator.py / scenario_context</text>
+
+  <rect x="872" y="485" width="210" height="48" class="box-gray"/>
+  <text x="977" y="506" text-anchor="middle" class="module">SessionArchive</text>
+  <text x="977" y="524" text-anchor="middle" class="file">transcript / history</text>
+
+  <path d="M 665 766 C 740 766 785 211 872 211" class="line"/>
+  <path d="M 977 242 L 977 280" class="line"/>
+  <path d="M 977 346 L 977 385" class="bidirectional"/>
+  <path d="M 977 451 L 977 485" class="line"/>
+
+  <!-- Evaluation layer -->
+  <rect x="1160" y="115" width="285" height="440" class="group"/>
+  <text x="1302.5" y="148" text-anchor="middle" class="group-title">评估层</text>
+
+  <rect x="1195" y="180" width="215" height="58" class="box-purple"/>
+  <text x="1302.5" y="204" text-anchor="middle" class="module">规则路由</text>
+  <text x="1302.5" y="224" text-anchor="middle" class="file">checks / semantic rules</text>
+
+  <rect x="1185" y="285" width="112" height="78" class="box-purple"/>
+  <text x="1241" y="314" text-anchor="middle" class="module">确定性</text>
+  <text x="1241" y="334" text-anchor="middle" class="module">Checker</text>
+  <text x="1241" y="353" text-anchor="middle" class="file">deterministic_checks.py</text>
+
+  <rect x="1310" y="285" width="112" height="78" class="box-purple"/>
+  <text x="1366" y="314" text-anchor="middle" class="module">LLM</text>
+  <text x="1366" y="334" text-anchor="middle" class="module">Judge</text>
+  <text x="1366" y="353" text-anchor="middle" class="file">evaluator.py</text>
+
+  <rect x="1195" y="405" width="215" height="58" class="box-purple"/>
+  <text x="1302.5" y="429" text-anchor="middle" class="module">多采样投票</text>
+  <text x="1302.5" y="449" text-anchor="middle" class="file">pass / fail / evidence</text>
+
+  <rect x="1195" y="488" width="215" height="45" class="box-gray"/>
+  <text x="1302.5" y="514" text-anchor="middle" class="module">EvaluationReport</text>
+
+  <path d="M 1082 509 L 1160 509 C 1175 509 1178 209 1195 209" class="line"/>
+  <path d="M 1302.5 238 C 1302.5 260 1241 260 1241 285" class="line"/>
+  <path d="M 1302.5 238 C 1302.5 260 1366 260 1366 285" class="line"/>
+  <path d="M 1241 363 C 1241 390 1302.5 382 1302.5 405" class="line"/>
+  <path d="M 1366 363 C 1366 390 1302.5 382 1302.5 405" class="line"/>
+  <path d="M 1302.5 463 L 1302.5 488" class="line"/>
+
+  <!-- Output layer -->
+  <rect x="835" y="620" width="610" height="215" class="group"/>
+  <text x="1140" y="653" text-anchor="middle" class="group-title">报告与持久化层</text>
+
+  <rect x="875" y="690" width="160" height="72" class="box-green"/>
+  <text x="955" y="718" text-anchor="middle" class="module">Streamlit 报告</text>
+  <text x="955" y="739" text-anchor="middle" class="file">app.py</text>
+  <text x="955" y="757" text-anchor="middle" class="file">通过率 / 一致率</text>
+
+  <rect x="1060" y="690" width="160" height="72" class="box-green"/>
+  <text x="1140" y="718" text-anchor="middle" class="module">评测记忆</text>
+  <text x="1140" y="739" text-anchor="middle" class="file">memory.py</text>
+  <text x="1140" y="757" text-anchor="middle" class="file">evaluation_memory.jsonl</text>
+
+  <rect x="1245" y="690" width="160" height="72" class="box-green"/>
+  <text x="1325" y="718" text-anchor="middle" class="module">归档文件</text>
+  <text x="1325" y="739" text-anchor="middle" class="file">sessions/*.json</text>
+  <text x="1325" y="757" text-anchor="middle" class="file">reports/report-*.json</text>
+
+  <path d="M 1302.5 533 C 1302.5 600 955 610 955 690" class="line"/>
+  <path d="M 1302.5 533 C 1302.5 600 1140 610 1140 690" class="line"/>
+  <path d="M 1302.5 533 L 1325 690" class="line"/>
+
+  <!-- Isolation note -->
+  <rect x="40" y="690" width="250" height="145" class="note"/>
+  <text x="165" y="722" text-anchor="middle" class="module">隔离约束</text>
+  <text x="165" y="752" text-anchor="middle" class="small">被测 Agent 只接收</text>
+  <text x="165" y="772" text-anchor="middle" class="small">原始或填值后的 instruction</text>
+  <text x="165" y="800" text-anchor="middle" class="small">RuleSet、SimulationCase</text>
+  <text x="165" y="820" text-anchor="middle" class="small">和 Judge 标准只在评测侧使用</text>
+
+  <path d="M 245 255 C 315 610 700 600 872 313" class="line-dash"/>
+  <text x="590" y="606" text-anchor="middle" class="small">仅传递 instruction</text>
+</svg>

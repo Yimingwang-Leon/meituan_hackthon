@@ -4,7 +4,8 @@ import os
 import sys
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime
 from html import escape
@@ -32,6 +33,7 @@ from src.simulator import UserSimulator
 from src.types import SessionArchive, SessionMeta
 
 MAX_TURNS = 15
+RUN_POLL_SECONDS = 1.0
 SESSIONS_DIR = Path(__file__).parent / "sessions"
 MEMORY_DIR = Path(__file__).parent / "memory"
 
@@ -1438,6 +1440,14 @@ class TestRunResult:
     timing_entry: dict
 
 
+def _case_session_label(sub_plan, case) -> str:
+    persona_label = _persona_label(case.profile_type)
+    return (
+        f"{sub_plan.set_id} · {case.target_rule_id} · "
+        f"{case.case_type_label} · {persona_label}"
+    )
+
+
 def _run_test_case(
     index: int,
     total: int,
@@ -1447,11 +1457,7 @@ def _run_test_case(
     target_rule,
     judge_samples: int,
 ) -> TestRunResult:
-    persona_label = _persona_label(case.profile_type)
-    session_label = (
-        f"{sub_plan.set_id} · {case.target_rule_id} · "
-        f"{case.case_type_label} · {persona_label}"
-    )
+    session_label = _case_session_label(sub_plan, case)
     session_id = f"{sub_plan.set_id}:{case.test_id}"
     session_timer_start = time.perf_counter()
     print(f"\n[{index}/{total}] 开始 {session_label}", flush=True)
@@ -1644,13 +1650,22 @@ with st.sidebar:
     )
     st.caption(f"当前最多同时运行 {parallel_workers} 个测试案例。")
 
+    case_timeout_minutes = st.select_slider(
+        "单案例超时",
+        options=[5, 10, 20, 30],
+        value=10,
+        format_func=lambda x: f"{x} 分钟",
+        help="单个测试案例超过该时间还未完成时，停止本轮运行并显示卡住的案例。",
+        key="slider_case_timeout_minutes",
+    )
+
     st.markdown(
         f'<div class="side-stat">'
         f'  <div class="label">运行范围</div>'
         f'  <div class="value">单 Prompt 评测</div>'
         f'  <div class="hint">{len(selected_personas)} 个用户类型筛选，'
         f'{judge_samples} 次 Judge 采样，最多展开 {num_placeholder_sets} 组占位符取值，'
-        f'{parallel_workers} 路并行</div>'
+        f'{parallel_workers} 路并行，单案例超时 {case_timeout_minutes} 分钟</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -1899,77 +1914,152 @@ if run_clicked:
 
     done = 0
     completed_results: dict[int, TestRunResult] = {}
+    case_timeout_seconds = float(case_timeout_minutes * 60)
     executor = ThreadPoolExecutor(max_workers=effective_parallel_workers)
     executor_closed = False
-    futures = []
-    try:
-        for index, (sub_plan, case) in enumerate(plan_case_pairs, start=1):
-            target_rule = rules_by_id[case.target_rule_id]
-            futures.append(
-                executor.submit(
-                    _run_test_case,
-                    index,
-                    total,
-                    sub_plan,
-                    case,
-                    agent_spec,
-                    target_rule,
-                    judge_samples,
-                )
-            )
+    pending_cases = deque(
+        (index, sub_plan, case)
+        for index, (sub_plan, case) in enumerate(plan_case_pairs, start=1)
+    )
+    active_futures = {}
 
-        for future in as_completed(futures):
-            try:
-                result = future.result()
-            except Exception as exc:
-                for pending in futures:
-                    pending.cancel()
-                executor.shutdown(wait=False, cancel_futures=True)
-                executor_closed = True
+    def _submit_next_case() -> None:
+        if not pending_cases:
+            return
+        index, sub_plan, case = pending_cases.popleft()
+        target_rule = rules_by_id[case.target_rule_id]
+        future = executor.submit(
+            _run_test_case,
+            index,
+            total,
+            sub_plan,
+            case,
+            agent_spec,
+            target_rule,
+            judge_samples,
+        )
+        active_futures[future] = {
+            "index": index,
+            "label": _case_session_label(sub_plan, case),
+            "started_at": time.perf_counter(),
+        }
+
+    try:
+        for _ in range(effective_parallel_workers):
+            _submit_next_case()
+
+        while active_futures:
+            finished, _ = wait(
+                tuple(active_futures),
+                timeout=RUN_POLL_SECONDS,
+                return_when=FIRST_COMPLETED,
+            )
+            now = time.perf_counter()
+
+            if not finished:
+                timed_out = [
+                    (future, meta, now - meta["started_at"])
+                    for future, meta in active_futures.items()
+                    if now - meta["started_at"] > case_timeout_seconds
+                ]
+                if timed_out:
+                    for pending_future in active_futures:
+                        pending_future.cancel()
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    executor_closed = True
+                    progress.progress(
+                        done / total,
+                        text=f"单案例超时 · 已完成 {done}/{total}",
+                    )
+                    timeout_lines = "\n".join(
+                        f"- [{meta['index']}/{total}] {meta['label']} · "
+                        f"已运行 {_format_duration(elapsed)}"
+                        for _, meta, elapsed in timed_out
+                    )
+                    st.error(
+                        "测试执行超时，已停止提交后续任务。"
+                        f"单案例超时阈值：{_format_duration(case_timeout_seconds)}。"
+                    )
+                    st.markdown(timeout_lines)
+                    st.info(
+                        "这通常表示该案例卡在模型接口请求、结构化输出修复，"
+                        "或 conditional Judge 的触发/合规判定阶段。"
+                        "可以降低并行度、减少 Judge 采样次数，或把单案例超时调大后重试。"
+                    )
+                    st.stop()
+
+                if active_futures:
+                    longest_elapsed = max(
+                        now - meta["started_at"]
+                        for meta in active_futures.values()
+                    )
+                    progress.progress(
+                        done / total,
+                        text=(
+                            f"运行中 · 已完成 {done}/{total} · "
+                            f"正在执行 {len(active_futures)} 个 · "
+                            f"最长运行 {_format_duration(longest_elapsed)}"
+                        ),
+                    )
+                continue
+
+            for future in finished:
+                meta = active_futures.pop(future)
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    for pending_future in active_futures:
+                        pending_future.cancel()
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    executor_closed = True
+                    progress.progress(
+                        done / total,
+                        text=f"并行执行失败 · 已完成 {done}/{total}",
+                    )
+                    st.error("测试执行失败，已取消尚未开始的任务。")
+                    st.error(f"失败案例：[{meta['index']}/{total}] {meta['label']}")
+                    st.error(f"{type(exc).__name__}: {exc}")
+                    root = exc.__cause__
+                    if root is not None:
+                        st.error(f"底层错误：{type(root).__name__}: {root}")
+                    st.info(
+                        "并行度较高时更容易触发模型接口限流、连接抖动或结构化输出异常；"
+                        "可以降低并行度后重新运行。"
+                    )
+                    st.stop()
+
+                append_evaluation_memory(result.archive, result.report, MEMORY_DIR)
+                completed_results[result.index] = result
+                ordered_results = [
+                    completed_results[index]
+                    for index in sorted(completed_results)
+                ]
+                st.session_state.run_timing["sessions"] = [
+                    ordered_result.timing_entry
+                    for ordered_result in ordered_results
+                ]
+                st.session_state.reports = [
+                    ordered_result.report
+                    for ordered_result in ordered_results
+                ]
+                st.session_state.transcripts = [
+                    ordered_result.item
+                    for ordered_result in ordered_results
+                ]
+                with live_slots[result.index - 1].container():
+                    _render_session_card(result.item, result.report)
+
+                done += 1
                 progress.progress(
                     done / total,
-                    text=f"并行执行失败 · 已完成 {done}/{total}",
+                    text=(
+                        f"已完成 · {result.session_label}  ({done}/{total}) · "
+                        f"并行度 {effective_parallel_workers} · 按规则顺序展示"
+                    ),
                 )
-                st.error("测试执行失败，已取消尚未开始的任务。")
-                st.error(f"{type(exc).__name__}: {exc}")
-                root = exc.__cause__
-                if root is not None:
-                    st.error(f"底层错误：{type(root).__name__}: {root}")
-                st.info(
-                    "并行度较高时更容易触发模型接口限流、连接抖动或结构化输出异常；"
-                    "可以降低并行度后重新运行。"
-                )
-                st.stop()
 
-            append_evaluation_memory(result.archive, result.report, MEMORY_DIR)
-            completed_results[result.index] = result
-            ordered_results = [
-                completed_results[index]
-                for index in sorted(completed_results)
-            ]
-            st.session_state.run_timing["sessions"] = [
-                ordered_result.timing_entry
-                for ordered_result in ordered_results
-            ]
-            st.session_state.reports = [
-                ordered_result.report
-                for ordered_result in ordered_results
-            ]
-            st.session_state.transcripts = [
-                ordered_result.item
-                for ordered_result in ordered_results
-            ]
-            with live_slots[result.index - 1].container():
-                _render_session_card(result.item, result.report)
-
-            done += 1
-            progress.progress(
-                done / total,
-                text=(
-                    f"已完成 · {result.session_label}  ({done}/{total}) · "
-                    f"并行度 {effective_parallel_workers} · 按规则顺序展示"
-                ),
-            )
+                while len(active_futures) < effective_parallel_workers and pending_cases:
+                    _submit_next_case()
     finally:
         if not executor_closed:
             executor.shutdown(wait=True, cancel_futures=True)
