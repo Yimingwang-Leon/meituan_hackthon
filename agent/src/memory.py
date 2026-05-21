@@ -54,6 +54,8 @@ def _serialize_rule_result(rule_result: RuleResult) -> dict[str, object]:
         ),
         "suggestion": getattr(rule_result, "suggestion", ""),
         "confidence": rule_result.confidence,
+        "trigger_confidence": getattr(rule_result, "trigger_confidence", None),
+        "compliance_confidence": getattr(rule_result, "compliance_confidence", None),
         "votes": rule_result.votes,
         "all_samples": getattr(rule_result, "all_samples", []),
     }

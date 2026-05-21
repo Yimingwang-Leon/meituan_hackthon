@@ -971,6 +971,8 @@ def _result_label(result: object) -> str:
         "fail": "失败",
         "not_applicable": "未触发",
         "trigger_failed": "目标未触发",
+        "triggered": "已触发",
+        "not_triggered": "未触发",
     }.get(str(result), str(result))
 
 
@@ -1006,6 +1008,42 @@ def _method_label(evaluated_by: object) -> str:
     return "程序自动检查" if str(evaluated_by) == "deterministic" else "LLM Judge"
 
 
+def _positive_int(value: object) -> int:
+    try:
+        parsed = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return parsed if parsed > 0 else 0
+
+
+def _sample_meta_html(sample: dict[str, object]) -> str:
+    phase = str(sample.get("phase", "single"))
+    index = escape(str(sample.get("sample_index", "?")))
+    result = escape(_result_label(sample.get("result", "")))
+    trigger_turn = _positive_int(sample.get("trigger_turn"))
+    response_turn = _positive_int(sample.get("response_turn"))
+
+    if phase == "trigger":
+        turn_text = f"第 {trigger_turn} 轮" if trigger_turn else "未定位轮次"
+        return (
+            f'<div class="sample-meta"><strong>触发判定 {index}：{result}</strong>'
+            f' · {turn_text}</div>'
+        )
+    if phase == "compliance":
+        turn_text = f"Agent响应第 {response_turn} 轮" if response_turn else "无明确响应轮次"
+        return (
+            f'<div class="sample-meta"><strong>合规判定 {index}：{result}</strong>'
+            f' · {turn_text}</div>'
+        )
+
+    parts = [f'<strong>第 {index} 次 Judge：{result}</strong>']
+    if trigger_turn:
+        parts.append(f"触发第 {trigger_turn} 轮")
+    if response_turn:
+        parts.append(f"Agent响应第 {response_turn} 轮")
+    return f'<div class="sample-meta">{" · ".join(parts)}</div>'
+
+
 def _samples_html(
     samples: list[dict[str, object]],
     evaluated_by: object = "llm_judge",
@@ -1015,10 +1053,6 @@ def _samples_html(
 
     items = []
     for sample in samples:
-        index = escape(str(sample.get("sample_index", "?")))
-        result = escape(_result_label(sample.get("result", "")))
-        trigger_turn = escape(str(sample.get("trigger_turn") or 0))
-        response_turn = escape(str(sample.get("response_turn") or 0))
         evidence = escape(str(sample.get("evidence", "")))
         rationale = escape(str(sample.get("rationale", "")))
         suggestion = escape(str(sample.get("suggestion", "")))
@@ -1028,8 +1062,7 @@ def _samples_html(
         )
         items.append(
             f'<div class="sample-item">'
-            f'  <div class="sample-meta"><strong>第 {index} 次 Judge：{result}</strong> · '
-            f'触发第 {trigger_turn} 轮 · Agent响应第 {response_turn} 轮</div>'
+            f'  {_sample_meta_html(sample)}'
             f'  <div><strong>证据</strong>：{evidence}</div>'
             f'  <div><strong>判定依据</strong>：{rationale}</div>'
             f'  {suggestion_html}'
@@ -1043,6 +1076,18 @@ def _samples_html(
         f'  {"".join(items)}'
         f'</details>'
     )
+
+
+def _confidence_detail_html(rule_result: object) -> str:
+    trigger_confidence = getattr(rule_result, "trigger_confidence", None)
+    if trigger_confidence is None:
+        return ""
+
+    parts = [f"触发一致率 {float(trigger_confidence):.0%}"]
+    compliance_confidence = getattr(rule_result, "compliance_confidence", None)
+    if compliance_confidence is not None:
+        parts.append(f"合规一致率 {float(compliance_confidence):.0%}")
+    return f'<div class="rule-trigger">{" · ".join(parts)}</div>'
 
 
 def _section_head(num: str, title_html: str, meta: str = "") -> None:
@@ -1336,13 +1381,20 @@ def _render_session_card(item: dict, report: EvaluationReport) -> None:
                     getattr(rr, "all_samples", []),
                     getattr(rr, "evaluated_by", "llm_judge"),
                 )
+                confidence_detail = _confidence_detail_html(rr)
                 # 触发信息条
                 trigger_info = ""
                 if rr.rule_type == "conditional" and rr.triggered is not None:
                     if rr.triggered:
+                        trigger_turn = _positive_int(rr.trigger_turn)
+                        response_turn = _positive_int(rr.response_turn)
+                        response_text = (
+                            f" · Agent 响应第 {response_turn} 轮"
+                            if response_turn else ""
+                        )
                         trigger_info = (
-                            f'<div class="rule-trigger">触发于第 {rr.trigger_turn} 轮 · '
-                            f'Agent 响应第 {rr.response_turn} 轮</div>'
+                            f'<div class="rule-trigger">触发于第 {trigger_turn} 轮'
+                            f'{response_text}</div>'
                         )
                     elif rr.is_primary:
                         trigger_info = (
@@ -1358,6 +1410,7 @@ def _render_session_card(item: dict, report: EvaluationReport) -> None:
                     f'      {_sev_pill(rr.severity)}'
                     f'      {_conf_pill(rr.confidence)}'
                     f'    </div>'
+                    f'    {confidence_detail}'
                     f'    {verdict}'
                     f'    {trigger_info}'
                     f'    {evidence}'
@@ -1396,13 +1449,16 @@ with st.sidebar:
     st.markdown("### 评测深度")
     judge_samples = st.select_slider(
         "LLM Judge 采样次数",
-        options=[1, 2, 3],
+        options=[1, 3],
         value=1,
-        format_func=lambda x: f"{x} 次采样" + (" · 快" if x == 1 else " · 稳" if x == 3 else ""),
-        help="每条目标规则的 LLM Judge 次数。多次判断可以看到 Judge 是否一致，但慢约 N 倍。",
+        format_func=lambda x: "1 次采样 · 快" if x == 1 else "3 次采样 · 更稳",
+        help="1 次适合快速检查；3 次可观察 Judge 分歧，避免 2 次采样平票。",
         key="slider_judge_samples",
     )
-    st.caption(f"当前每条目标规则会评判 {judge_samples} 次，并保存每次 Judge 明细。")
+    st.caption(
+        f"当前每条目标规则会评判 {judge_samples} 次，并保存每次 Judge 明细。"
+        "3 次更稳，可观察触发/合规判断分歧。"
+    )
 
     st.markdown("### 占位符取值")
     num_placeholder_sets = st.select_slider(
