@@ -451,3 +451,10 @@ def _get_extra_body() -> dict[str, object]:
     if raw_thinking in {"1", "true", "yes", "on", "enabled"}:
         return {"thinking": {"type": "enabled"}}
     return {}
+
+
+__all__ = [
+    "Agent",
+    "Runner",
+    "trace",
+]

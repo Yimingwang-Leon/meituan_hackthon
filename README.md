@@ -65,6 +65,18 @@ python auto_main.py instructions/cancel.json    # 批量生成对话
 python evaluate_main.py                         # 评测已生成对话
 ```
 
+高级用法：项目也提供一个轻量命令行 Evaluation Harness，可用于批量回归和轨迹留档：
+
+```bash
+cd agent
+python -m harness.runner --cases cases/sample_cases.json --agent scripted_mock_agent
+```
+
+运行后会输出：
+
+- `outputs/trajectories/{case_id}_{agent_version}.json`
+- `outputs/reports/summary.md`
+
 端到端 smoke test（验证两步 Judge 真实跑通）：
 
 ```bash
@@ -80,7 +92,11 @@ python smoke_test_e2e.py cancel
 ├── TECHNICAL_REPORT.md       # 技术方案说明
 └── agent/
     ├── app.py                # Streamlit 可视化入口
-    ├── agents.py             # LLM 调用封装（重试 / JSON 修复 / 容错）
+    ├── agents/               # LLM 调用封装 + Agent Adapter
+    ├── harness/              # Runner / State / Recorder / Report
+    ├── evaluators/           # Harness rule checker + soft judge
+    ├── tools/                # Mock tool runtime
+    ├── cases/                # Harness sample cases
     ├── auto_main.py          # 命令行批量对话
     ├── evaluate_main.py      # 命令行批量评测
     ├── smoke_test_e2e.py     # 端到端 smoke test
