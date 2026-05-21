@@ -1792,6 +1792,30 @@ if run_clicked:
     if not plan_case_pairs:
         st.warning("当前用户类型筛选没有命中任何自动生成的测试对话。")
         st.stop()
+    rule_display_order = {
+        rule.rule_id: index
+        for index, rule in enumerate(parsed_rules)
+    }
+    sub_plan_display_order = {
+        sub_plan.set_id: index
+        for index, sub_plan in enumerate(sub_plans)
+    }
+    case_type_display_order = {
+        "normal_trigger": 0,
+        "ambiguous_trigger": 1,
+        "strong_trigger": 2,
+        "adversarial_induction": 3,
+        "boundary": 4,
+    }
+    plan_case_pairs.sort(
+        key=lambda pair: (
+            rule_display_order.get(pair[1].target_rule_id, 9999),
+            sub_plan_display_order.get(pair[0].set_id, 9999),
+            case_type_display_order.get(pair[1].case_type, 9999),
+            pair[1].profile_type,
+            pair[1].test_id,
+        )
+    )
 
     st.session_state.parsed_rules = parsed_rules
     st.session_state.sub_plans = sub_plans
@@ -1867,8 +1891,14 @@ if run_clicked:
         text=f"准备运行 {total} 个会话 · 并行度 {effective_parallel_workers}",
     )
     live = st.container()
+    with live:
+        live_slots = [
+            st.empty()
+            for _ in plan_case_pairs
+        ]
 
     done = 0
+    completed_results: dict[int, TestRunResult] = {}
     executor = ThreadPoolExecutor(max_workers=effective_parallel_workers)
     executor_closed = False
     futures = []
@@ -1912,10 +1942,24 @@ if run_clicked:
                 st.stop()
 
             append_evaluation_memory(result.archive, result.report, MEMORY_DIR)
-            st.session_state.run_timing["sessions"].append(result.timing_entry)
-            st.session_state.reports.append(result.report)
-            st.session_state.transcripts.append(result.item)
-            with live:
+            completed_results[result.index] = result
+            ordered_results = [
+                completed_results[index]
+                for index in sorted(completed_results)
+            ]
+            st.session_state.run_timing["sessions"] = [
+                ordered_result.timing_entry
+                for ordered_result in ordered_results
+            ]
+            st.session_state.reports = [
+                ordered_result.report
+                for ordered_result in ordered_results
+            ]
+            st.session_state.transcripts = [
+                ordered_result.item
+                for ordered_result in ordered_results
+            ]
+            with live_slots[result.index - 1].container():
                 _render_session_card(result.item, result.report)
 
             done += 1
@@ -1923,7 +1967,7 @@ if run_clicked:
                 done / total,
                 text=(
                     f"已完成 · {result.session_label}  ({done}/{total}) · "
-                    f"并行度 {effective_parallel_workers}"
+                    f"并行度 {effective_parallel_workers} · 按规则顺序展示"
                 ),
             )
     finally:
